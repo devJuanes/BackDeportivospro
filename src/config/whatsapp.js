@@ -1,5 +1,6 @@
 const { Client, LocalAuth } = require("whatsapp-web.js");
 const qrcode = require("qrcode-terminal");
+const fs = require("node:fs");
 const logger = require("../utils/logger");
 const { getFreePredictions } = require("../models/predictionModel");
 const { getVipPredictions } = require("../models/vipModel");
@@ -9,6 +10,26 @@ const { getCurrentLiveSignals } = require("../services/liveSignalService");
 let client = null;
 let ready = false;
 const processedMessageIds = new Set();
+
+function resolveChromeExecutablePath() {
+  if (process.env.CHROME_EXECUTABLE_PATH) {
+    return process.env.CHROME_EXECUTABLE_PATH;
+  }
+
+  const candidates = [
+    "/usr/bin/chromium-browser",
+    "/usr/bin/chromium",
+    "/usr/bin/google-chrome",
+  ];
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  return undefined;
+}
 
 function normalizeChatId(value = "") {
   const raw = String(value).trim();
@@ -146,11 +167,20 @@ function initWhatsApp() {
     return client;
   }
 
+  const chromeExecutablePath = resolveChromeExecutablePath();
+  if (chromeExecutablePath) {
+    logger.info(`WhatsApp usará navegador del sistema: ${chromeExecutablePath}`);
+  } else {
+    logger.warn(
+      "No se encontró Chromium/Chrome del sistema. Puppeteer usará el binario embebido."
+    );
+  }
+
   client = new Client({
     authStrategy: new LocalAuth({ clientId: "deportivospro-bot" }),
     puppeteer: {
       headless: true,
-      executablePath: process.env.CHROME_EXECUTABLE_PATH || undefined,
+      executablePath: chromeExecutablePath,
       args: [
         "--no-sandbox",
         "--disable-setuid-sandbox",

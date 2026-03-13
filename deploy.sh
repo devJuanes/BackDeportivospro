@@ -10,6 +10,7 @@ set -Eeuo pipefail
 #   APP_NAME=backdeportivospro
 #   APP_START_CMD="npm start"
 #   USE_PM2=true|false            # por defecto true si pm2 está instalado
+#   INSTALL_WHATSAPP_DEPS=true    # instala dependencias Chromium en Ubuntu
 
 APP_NAME="${APP_NAME:-backdeportivospro}"
 APP_START_CMD="${APP_START_CMD:-npm start}"
@@ -41,6 +42,25 @@ if command -v flock >/dev/null 2>&1; then
 fi
 
 cd "$ROOT_DIR"
+
+# Ubuntu Server: instalar libs de Chromium para whatsapp-web.js (opcional)
+if [ "${INSTALL_WHATSAPP_DEPS:-false}" = "true" ]; then
+  if command -v apt-get >/dev/null 2>&1; then
+    echo "[$(date -Is)] Instalando dependencias de Chromium para WhatsApp..."
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get install -y \
+      ca-certificates fonts-liberation libasound2 libatk-bridge2.0-0 libatk1.0-0 \
+      libcups2 libdrm2 libgbm1 libgtk-3-0 libnss3 libxcomposite1 libxdamage1 \
+      libxfixes3 libxkbcommon0 libxrandr2 xdg-utils libpango-1.0-0 libcairo2 \
+      libatspi2.0-0 libx11-xcb1 libxcb1 libxss1 libxtst6 libglib2.0-0 || true
+
+    # Intenta instalar Chromium del sistema (si existe paquete).
+    apt-get install -y chromium-browser || apt-get install -y chromium || true
+  else
+    echo "[$(date -Is)] apt-get no disponible. Omitiendo INSTALL_WHATSAPP_DEPS."
+  fi
+fi
 
 if ! command -v git >/dev/null 2>&1; then
   echo "[$(date -Is)] ERROR: git no está instalado."
