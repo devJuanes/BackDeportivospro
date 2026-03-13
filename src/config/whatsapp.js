@@ -150,7 +150,13 @@ function initWhatsApp() {
     authStrategy: new LocalAuth({ clientId: "deportivospro-bot" }),
     puppeteer: {
       headless: true,
-      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+      executablePath: process.env.CHROME_EXECUTABLE_PATH || undefined,
+      args: [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-gpu",
+      ],
     },
   });
 
@@ -202,6 +208,9 @@ function initWhatsApp() {
 
   client.initialize().catch((error) => {
     logger.error(`No se pudo iniciar WhatsApp: ${error.message}`);
+    logger.error(
+      "Si estás en VPS Linux, instala librerías de Chromium y opcionalmente define CHROME_EXECUTABLE_PATH=/usr/bin/chromium-browser."
+    );
   });
 
   return client;
