@@ -1,0 +1,31 @@
+{
+  "name": "backdeportivospro",
+  "version": "1.0.0",
+  "main": "src/server.js",
+  "scripts": {
+    "dev": "nodemon src/server.js",
+    "start": "node src/server.js",
+    "db:schema": "node src/database/runSchema.js",
+    "test": "echo \"Sin tests configurados\""
+  },
+  "keywords": [],
+  "author": "DeportivosPro",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@devjuanes/matuclient": "^2.2.2",
+    "axios": "^1.13.6",
+    "cheerio": "^1.2.0",
+    "cors": "^2.8.6",
+    "dotenv": "^17.3.1",
+    "express": "^5.2.1",
+    "morgan": "^1.10.1",
+    "node-cron": "^4.2.1",
+    "qrcode-terminal": "^0.12.0",
+    "whatsapp-web.js": "^1.34.6",
+    "winston": "^3.19.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.14"
+  }
+}
