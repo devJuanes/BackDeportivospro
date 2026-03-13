@@ -125,6 +125,21 @@ fi
 
 if [ "$USE_PM2" = "true" ]; then
   echo "[$(date -Is)] Reiniciando con PM2..."
+  if [ -f "$ROOT_DIR/ecosystem.config.cjs" ]; then
+    if pm2 describe "$APP_NAME" >/dev/null 2>&1; then
+      pm2 restart "$ROOT_DIR/ecosystem.config.cjs" --only "$APP_NAME" --update-env
+    else
+      pm2 start "$ROOT_DIR/ecosystem.config.cjs" --only "$APP_NAME"
+    fi
+    pm2 save
+    echo "[$(date -Is)] PM2 status:"
+    pm2 status "$APP_NAME" || true
+    echo "[$(date -Is)] Deploy finalizado correctamente."
+    echo "Log deploy: $DEPLOY_LOG"
+    echo "=================================================="
+    exit 0
+  fi
+
   if pm2 describe "$APP_NAME" >/dev/null 2>&1; then
     pm2 restart "$APP_NAME" --update-env
   else
