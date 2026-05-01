@@ -3,6 +3,7 @@ const {
   listVipPredictions,
   createVip,
   updateVipState,
+  updateVipModeration,
   getVipDailySummary,
 } = require("../controllers/vipController");
 
@@ -12,5 +13,6 @@ router.get("/vip", listVipPredictions);
 router.get("/vip/summary/today", getVipDailySummary);
 router.post("/vip", createVip);
 router.patch("/vip/:id/state", updateVipState);
+router.patch("/vip/:id/moderation", updateVipModeration);
 
 module.exports = router;

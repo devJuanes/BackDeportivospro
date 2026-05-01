@@ -17,7 +17,7 @@ async function getLivePredictions(limit = 100, filters = {}) {
 }
 
 async function createLivePrediction(payload) {
-  const { data, error } = await db.from("abetlive").insert({
+  const row = {
     sport: payload.sport,
     league: payload.league,
     home_team_name: payload.homeTeam?.name || payload.home_team_name,
@@ -26,32 +26,66 @@ async function createLivePrediction(payload) {
     prediction: payload.prediction,
     confidence: payload.confidence,
     odds: payload.odds,
-  });
+  };
+  if (payload.ai_rationale) {
+    row.ai_rationale = payload.ai_rationale;
+  }
+  if (payload.state) {
+    row.state = payload.state;
+  }
+  const { data, error } = await db.from("abetlive").insert(row);
   if (error) {
     throw new Error(error.message || "Error creando pronóstico live");
   }
   return Array.isArray(data) ? data[0] : data;
 }
 
+const { normalizePickLabel } = require("../utils/predictionDedupe");
+
 async function existsRecentLivePrediction(payload, sinceIso) {
   const { data, error } = await db
     .from("abetlive")
-    .select("*")
+    .select("prediction")
     .eq("sport", payload.sport)
     .eq("home_team_name", payload.home_team_name)
     .eq("away_team_name", payload.away_team_name)
-    .eq("prediction", payload.prediction)
     .gte("created_at", sinceIso)
-    .limit(1);
+    .limit(40);
 
   if (error) {
     throw new Error(error.message || "Error validando duplicado live");
   }
-  return Boolean(data?.[0]);
+  const target = normalizePickLabel(payload.prediction);
+  return Boolean(data?.some((row) => normalizePickLabel(row.prediction) === target));
+}
+
+/** Marca filas live como ended si el partido ya no figura en la fuente en vivo. */
+async function reconcileStaleLivePredictions(activePairKeys, sinceIso) {
+  const keys = activePairKeys instanceof Set ? activePairKeys : new Set(activePairKeys);
+  const { data, error } = await db
+    .from("abetlive")
+    .select("id,home_team_name,away_team_name,state")
+    .gte("created_at", sinceIso);
+
+  if (error) {
+    throw new Error(error.message || "Error reconciliando live");
+  }
+  const nowIso = new Date().toISOString();
+  for (const row of data || []) {
+    if (!row.id || row.state === "ended") continue;
+    const k = `${row.home_team_name}|${row.away_team_name}`;
+    if (!keys.has(k)) {
+      await db
+        .from("abetlive")
+        .update({ state: "ended", updated_at: nowIso })
+        .eq("id", row.id);
+    }
+  }
 }
 
 module.exports = {
   getLivePredictions,
   createLivePrediction,
   existsRecentLivePrediction,
+  reconcileStaleLivePredictions,
 };

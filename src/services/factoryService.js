@@ -2,7 +2,7 @@ const logger = require("../utils/logger");
 const { runPredictionPipeline } = require("../jobs/scrapingJobs");
 const { monitorLiveMatches } = require("../jobs/liveMonitor");
 const { collectAndStoreSportsNews } = require("./newsService");
-const { getSupportedSports } = require("./sportsService");
+const { getFactorySports } = require("./sportsService");
 const { getFreeSummaryToday } = require("../models/predictionModel");
 const { getVipSummaryToday } = require("../models/vipModel");
 const { getLivePredictions } = require("../models/liveModel");
@@ -14,6 +14,7 @@ const {
 const { getCurrentLiveSignals } = require("./liveSignalService");
 
 const factoryState = {
+  enabled: true,
   running: false,
   last_run_started_at: null,
   last_run_finished_at: null,
@@ -21,22 +22,16 @@ const factoryState = {
   last_run_result: null,
 };
 
-function resolveFactorySports() {
-  const raw = process.env.FACTORY_SPORTS;
-  if (!raw) {
-    return ["football"];
-  }
-  const allowed = new Set(getSupportedSports());
-  const parsed = raw
-    .split(",")
-    .map((s) => s.trim().toLowerCase())
-    .filter(Boolean)
-    .filter((s) => allowed.has(s));
-  return parsed.length > 0 ? parsed : ["football"];
-}
-
 async function runFactoryCycleNow(options = {}) {
   const includeNews = options.includeNews === true;
+  const force = options.force === true;
+  if (!factoryState.enabled && !force) {
+    return {
+      skipped: true,
+      reason: "factory_disabled",
+      ...factoryState,
+    };
+  }
   if (factoryState.running) {
     return {
       skipped: true,
@@ -50,12 +45,13 @@ async function runFactoryCycleNow(options = {}) {
   factoryState.last_run_error = null;
 
   try {
-    const sports = resolveFactorySports();
+    const sports = getFactorySports();
+    const enableSourceHealth = process.env.FACTORY_ENABLE_EXTERNAL_SCRAPERS === "true";
     const [pipelineSettled, liveCount, news, sourceHealth] = await Promise.all([
       Promise.allSettled(sports.map((sport) => runPredictionPipeline({ sport }))),
       monitorLiveMatches(),
       includeNews ? collectAndStoreSportsNews() : Promise.resolve([]),
-      refreshSourcesHealth("football", 10),
+      enableSourceHealth ? refreshSourcesHealth("football", 10) : Promise.resolve([]),
     ]);
 
     const pipelineBySport = pipelineSettled
@@ -94,6 +90,14 @@ async function runFactoryCycleNow(options = {}) {
   }
 }
 
+function setFactoryEnabled(enabled) {
+  factoryState.enabled = enabled === true;
+  return {
+    enabled: factoryState.enabled,
+    running: factoryState.running,
+  };
+}
+
 async function getFactoryStatus() {
   const sinceIso = new Date(Date.now() - 45 * 60 * 1000).toISOString();
   const [free, vip, liveHistory, liveCurrent, sources, sourcePolicy] = await Promise.all([
@@ -119,4 +123,5 @@ async function getFactoryStatus() {
 module.exports = {
   runFactoryCycleNow,
   getFactoryStatus,
+  setFactoryEnabled,
 };

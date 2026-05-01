@@ -1,4 +1,6 @@
 const axios = require("axios");
+const logger = require("../utils/logger");
+const { upsertFixtures, getFixturesByDateSport } = require("../models/fixtureModel");
 const {
   formatDateInTimezone,
   formatHourInTimezone,
@@ -28,6 +30,21 @@ const ESPN_PATH_BY_SPORT = {
 
 function getSupportedSports() {
   return SUPPORTED_SPORTS;
+}
+
+/** Deportes que ejecuta la fábrica (predictions + live monitor). Respeta FACTORY_SPORTS; por defecto solo fútbol. */
+function getFactorySports() {
+  const raw = process.env.FACTORY_SPORTS;
+  if (!raw) {
+    return ["football"];
+  }
+  const allowed = new Set(SUPPORTED_SPORTS);
+  const parsed = raw
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean)
+    .filter((s) => allowed.has(s));
+  return parsed.length > 0 ? parsed : ["football"];
 }
 
 function validateSport(sport) {
@@ -91,9 +108,14 @@ function normalizeMinuteBySport(statusShort = "", sport = "football") {
 async function getTodayFixturesBySport(sport = "football", dateIso = null) {
   const timezone = getFactoryTimezone();
   const effectiveDateIso = dateIso || formatDateInTimezone(new Date(), timezone);
-  const events = await fetchEspnScoreboardRaw(sport, effectiveDateIso);
+  let events = [];
+  try {
+    events = await fetchEspnScoreboardRaw(sport, effectiveDateIso);
+  } catch (error) {
+    logger.warn(`Fuente ESPN no disponible (${sport}): ${error.message}`);
+  }
 
-  const fixtures = events
+  const fixturesFromSource = events
     .map((event) => {
       const teams = parseCompetitors(event);
       const eventDate = new Date(event.date);
@@ -115,7 +137,41 @@ async function getTodayFixturesBySport(sport = "football", dateIso = null) {
     })
     .filter((row) => row.match_date === effectiveDateIso);
 
-  return fixtures;
+  if (fixturesFromSource.length > 0) {
+    try {
+      await upsertFixtures(
+        fixturesFromSource.map((row) => ({
+          ...row,
+          source: "espn",
+          source_event_id: row.eventId,
+          raw_payload: null,
+        }))
+      );
+    } catch (error) {
+      logger.warn(`No se pudo guardar caché de fixtures (${sport}): ${error.message}`);
+    }
+    return fixturesFromSource;
+  }
+
+  try {
+    const cached = await getFixturesByDateSport(effectiveDateIso, sport);
+    return cached.map((row) => ({
+      eventId: row.source_event_id,
+      sport: row.sport,
+      league: row.league,
+      match_date: row.match_date,
+      match_hour: row.match_hour,
+      homeTeam: row.team_a,
+      awayTeam: row.team_b,
+      homeGoals: row.home_goals,
+      awayGoals: row.away_goals,
+      status: row.status,
+      minute: row.minute,
+    }));
+  } catch (error) {
+    logger.warn(`No se pudo usar caché de fixtures (${sport}): ${error.message}`);
+    return [];
+  }
 }
 
 async function getLiveMatchesBySport(sport = "football") {
@@ -137,13 +193,28 @@ async function getLiveMatchesBySport(sport = "football") {
         status_short: statusShort,
       };
     })
-    .filter((row) => row.status === "in");
+    .filter((row) => {
+      if (row.status !== "in") {
+        return false;
+      }
+      /** Evita “en vivo” fantasma: partido marcado in pero sin tiempo ni marcador ni detalle útil. */
+      if (sport === "football") {
+        const min = row.minute || 0;
+        const scored = (row.homeGoals || 0) + (row.awayGoals || 0) > 0;
+        if (min >= 1 || scored) {
+          return true;
+        }
+        return /\d/.test(String(row.status_short || ""));
+      }
+      return true;
+    });
 
   return liveRows;
 }
 
 module.exports = {
   getSupportedSports,
+  getFactorySports,
   validateSport,
   getFactoryTimezone,
   getTodayFixturesBySport,

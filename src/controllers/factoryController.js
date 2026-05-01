@@ -1,4 +1,8 @@
-const { runFactoryCycleNow, getFactoryStatus } = require("../services/factoryService");
+const {
+  runFactoryCycleNow,
+  getFactoryStatus,
+  setFactoryEnabled,
+} = require("../services/factoryService");
 const { listSources, syncDefaultSources } = require("../services/sourceService");
 const { isWhatsAppReady } = require("../config/whatsapp");
 
@@ -18,6 +22,19 @@ async function runNow(req, res, next) {
   try {
     const result = await runFactoryCycleNow({ includeNews: true });
     res.json(result);
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function setPower(req, res, next) {
+  try {
+    const enabled = req.body?.enabled === true;
+    const state = setFactoryEnabled(enabled);
+    res.json({
+      ok: true,
+      ...state,
+    });
   } catch (error) {
     next(error);
   }
@@ -46,6 +63,7 @@ async function syncSources(req, res, next) {
 module.exports = {
   getStatus,
   runNow,
+  setPower,
   getSources,
   syncSources,
 };

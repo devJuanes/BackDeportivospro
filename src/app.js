@@ -7,6 +7,7 @@ const liveRoutes = require("./routes/liveRoutes");
 const newsRoutes = require("./routes/newsRoutes");
 const factoryRoutes = require("./routes/factoryRoutes");
 const whatsappRoutes = require("./routes/whatsappRoutes");
+const paymentsRoutes = require("./routes/paymentsRoutes");
 const { getSupportedSports } = require("./services/sportsService");
 
 const app = express();
@@ -29,6 +30,7 @@ app.use("/api/predictions", liveRoutes);
 app.use("/api/news", newsRoutes);
 app.use("/api/factory", factoryRoutes);
 app.use("/api/whatsapp", whatsappRoutes);
+app.use("/api/payments", paymentsRoutes);
 
 app.use((req, res) => {
   res.status(404).json({ error: "Ruta no encontrada" });

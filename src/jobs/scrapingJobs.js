@@ -7,27 +7,36 @@ const {
 const { createFreePrediction, getFreePredictions } = require("../models/predictionModel");
 const { createVipPrediction, getVipPredictions } = require("../models/vipModel");
 const { getTodayFixturesBySport } = require("../services/sportsService");
+const { prioritizeFixtures } = require("../services/fixturePriorityService");
 const { getPredictionSourcePolicy, toHost } = require("../services/sourceService");
+const { generateAiPredictionsFromFixtures } = require("../services/aiForecastService");
+const { mergeDedupeByKey } = require("../utils/predictionDedupe");
 const logger = require("../utils/logger");
 
 function buildMatchKey(row) {
-  const home = row.homeTeam?.name || row.home_team_name || "";
-  const away = row.awayTeam?.name || row.away_team_name || "";
+  const home = row.homeTeam?.name || row.home_team_name || row.team_a || "";
+  const away = row.awayTeam?.name || row.away_team_name || row.team_b || "";
   const date = row.date || row.match_date || "";
-  return `${home.toLowerCase()}|${away.toLowerCase()}|${date}`;
+  const market = row.prediction || row.pick_text || "";
+  return `${home.toLowerCase()}|${away.toLowerCase()}|${date}|${String(market).toLowerCase()}`;
 }
 
 async function runPredictionPipeline(options = {}) {
   const sport = options.sport || "football";
   logger.info(`Iniciando pipeline de scraping + predicción (${sport})...`);
+  const scraperEnabled = process.env.FACTORY_ENABLE_EXTERNAL_SCRAPERS === "true";
   let fixtures = [];
   try {
     fixtures = await getTodayFixturesBySport(sport);
   } catch (error) {
     logger.warn(`No se pudieron leer fixtures ${sport}: ${error.message}`);
   }
+  const prioritizedFixtures = sport === "football" ? prioritizeFixtures(fixtures) : fixtures;
 
-  const scraped = sport === "football" ? await runAllPredictionScrapers() : [];
+  const scraped = sport === "football" && scraperEnabled ? await runAllPredictionScrapers() : [];
+  if (sport === "football" && !scraperEnabled) {
+    logger.info("Scrapers externos deshabilitados. Usando solo fuentes de fixtures.");
+  }
 
   let sourcePolicy = {
     sport,
@@ -50,7 +59,11 @@ async function runPredictionPipeline(options = {}) {
     return sourcePolicy.vip_hosts.length === 0 || sourcePolicy.vip_hosts.includes(host);
   });
 
-  const fromFixtures = buildPredictionsFromFixtures(fixtures, { free: 10, vip: 10 });
+  const fromFixtures = buildPredictionsFromFixtures(prioritizedFixtures, { free: 10, vip: 10 });
+  const aiFromFixtures =
+    sport === "football"
+      ? await generateAiPredictionsFromFixtures(prioritizedFixtures)
+      : { free: [], vip: [] };
   const fromScrapers = splitFreeAndVipPredictions(scrapedForFree, sport, { free: 10, vip: 10 });
   const vipFromReliableScrapers = buildTierPredictionsFromScraped(
     scrapedForVip,
@@ -59,13 +72,15 @@ async function runPredictionPipeline(options = {}) {
     10
   );
 
-  const freePicks = fromFixtures.free.length > 0 ? fromFixtures.free : fromScrapers.free;
-  const vipPicks =
-    vipFromReliableScrapers.length > 0
-      ? vipFromReliableScrapers
-      : fromFixtures.vip.length > 0
-        ? fromFixtures.vip
-        : fromScrapers.vip;
+  /** IA DeepSeek primero; luego scrapers; último motor por fixtures — sin repetir mismo partido+mercado. */
+  const freePicks = mergeDedupeByKey(
+    [aiFromFixtures.free, fromScrapers.free, fromFixtures.free],
+    buildMatchKey
+  );
+  const vipPicks = mergeDedupeByKey(
+    [aiFromFixtures.vip, vipFromReliableScrapers, fromFixtures.vip, fromScrapers.vip],
+    buildMatchKey
+  );
 
   const [existingFree, existingVip] = await Promise.all([
     getFreePredictions(500, { todayOnly: true, sport }),
@@ -97,7 +112,7 @@ async function runPredictionPipeline(options = {}) {
   }
 
   logger.info(
-    `Pipeline completado (${sport}): fixtures=${fixtures.length}, scraped=${scraped.length}, free=${insertedFree}, vip=${insertedVip}, strictVip=${sourcePolicy.strict_vip}`
+    `Pipeline completado (${sport}): fixtures=${fixtures.length}, prioritized=${prioritizedFixtures.length}, scraped=${scraped.length}, free=${insertedFree}, vip=${insertedVip}, strictVip=${sourcePolicy.strict_vip}`
   );
   return {
     free: insertedFree,

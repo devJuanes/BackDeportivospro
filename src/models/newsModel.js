@@ -1,10 +1,21 @@
 const { db } = require("../config/database");
+const NEWS_TABLE = process.env.FACTORY_NEWS_TABLE || "news_articles";
+
+function toSlug(text = "") {
+  return String(text)
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 120);
+}
 
 async function getNews(limit = 100) {
   const { data, error } = await db
-    .from("sports_news")
+    .from(NEWS_TABLE)
     .select("*")
-    .order("created_at", { ascending: false })
+    .order("published_at", { ascending: false })
     .limit(limit);
   if (error) {
     throw new Error(error.message || "Error obteniendo noticias");
@@ -13,12 +24,21 @@ async function getNews(limit = 100) {
 }
 
 async function createNews(news) {
-  const { data, error } = await db.from("sports_news").insert({
+  const slug = toSlug(news.slug || news.title || "noticia");
+  const excerpt = news.summary || news.excerpt || "Actualización deportiva.";
+  const content = news.content || news.summary || excerpt;
+  const { data, error } = await db.from(NEWS_TABLE).insert({
+    slug,
     title: news.title,
-    summary: news.summary,
-    url: news.url,
-    image: news.image,
-    source: news.source,
+    excerpt,
+    content,
+    category: news.category || "noticias",
+    image_url: news.image,
+    author: news.author || "Equipo MatuPicks",
+    read_time: Number.isInteger(news.read_time) ? news.read_time : 5,
+    featured: news.featured === true,
+    seo_title: news.seo_title || null,
+    seo_description: news.seo_description || null,
   });
   if (error) {
     throw new Error(error.message || "Error creando noticia");
@@ -26,20 +46,20 @@ async function createNews(news) {
   return Array.isArray(data) ? data[0] : data;
 }
 
-async function getNewsByUrl(url) {
+async function getNewsBySlug(slug) {
   const { data, error } = await db
-    .from("sports_news")
+    .from(NEWS_TABLE)
     .select("*")
-    .eq("url", url)
+    .eq("slug", slug)
     .limit(1);
   if (error) {
-    throw new Error(error.message || "Error buscando noticia por URL");
+    throw new Error(error.message || "Error buscando noticia por slug");
   }
   return data?.[0] || null;
 }
 
 async function createNewsIfNew(news) {
-  const existing = await getNewsByUrl(news.url);
+  const existing = await getNewsBySlug(toSlug(news.slug || news.title || "noticia"));
   if (existing) {
     return null;
   }
@@ -49,6 +69,6 @@ async function createNewsIfNew(news) {
 module.exports = {
   getNews,
   createNews,
-  getNewsByUrl,
+  getNewsBySlug,
   createNewsIfNew,
 };

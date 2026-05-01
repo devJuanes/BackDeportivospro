@@ -2,6 +2,7 @@ const {
   getVipPredictions,
   createVipPrediction,
   updateVipPredictionState,
+  updateVipModerationStatus,
   getVipSummaryToday,
 } = require("../models/vipModel");
 const { sendMessage } = require("../config/whatsapp");
@@ -9,12 +10,12 @@ const { sendMessage } = require("../config/whatsapp");
 function buildVipMessage(prediction) {
   return `🔥 PRONOSTICO VIP
 
-${prediction.home_team_name || prediction.homeTeam?.name} vs ${
-    prediction.away_team_name || prediction.awayTeam?.name
+${prediction.home_team_name || prediction.team_a || prediction.homeTeam?.name} vs ${
+    prediction.away_team_name || prediction.team_b || prediction.awayTeam?.name
   }
 
 Pronostico VIP:
-${prediction.prediction}
+${prediction.prediction || prediction.pick_text}
 
 Confianza:
 ${prediction.confidence}%
@@ -32,6 +33,7 @@ async function listVipPredictions(req, res, next) {
       todayOnly: req.query.today === "true",
       sport: req.query.sport,
       date: req.query.date,
+      moderationStatus: req.query.moderation || "active",
     });
     res.json(rows);
   } catch (error) {
@@ -61,6 +63,23 @@ async function updateVipState(req, res, next) {
   }
 }
 
+async function updateVipModeration(req, res, next) {
+  try {
+    const moderation = String(req.body.moderation_status || "").toLowerCase();
+    if (!["pending", "active", "rejected"].includes(moderation)) {
+      return res.status(400).json({ error: "moderation_status inválido" });
+    }
+    const row = await updateVipModerationStatus(
+      req.params.id,
+      moderation,
+      req.body.moderation_note || null
+    );
+    res.json(row);
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function getVipDailySummary(req, res, next) {
   try {
     const summary = await getVipSummaryToday();
@@ -74,5 +93,6 @@ module.exports = {
   listVipPredictions,
   createVip,
   updateVipState,
+  updateVipModeration,
   getVipDailySummary,
 };

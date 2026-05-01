@@ -15,7 +15,7 @@ const MARKET_TEMPLATES = {
       { market: "Ambos equipos marcan + Más de 2.5", baseConfidence: 71, rationale: "Escenario de alta producción ofensiva." },
       { market: "Total córners: Más de 8.5", baseConfidence: 69, rationale: "Ritmo alto y amplitud por bandas." },
       { market: "Tarjetas: Más de 3.5", baseConfidence: 70, rationale: "Contexto competitivo y fricción esperada." },
-      { market: "Draw No Bet local", baseConfidence: 74, rationale: "Protección de stake con sesgo local." },
+      { market: "Victoria local — mercado 1X2", baseConfidence: 72, rationale: "Selección principal con valor sobre la cuota implícita." },
     ],
   },
   basketball: {
@@ -180,7 +180,8 @@ function splitFreeAndVipPredictions(
     if (free.length < limits.free && !seenMatches.has(matchKey)) {
       free.push({
         ...row,
-        confidence: clamp(row.confidence, 55, 78),
+        confidence: clamp(row.confidence, 58, 80),
+        probability: clamp(row.confidence + 5, 55, 86),
         rationale_short: buildRationale(row, "free"),
       });
       seenMatches.add(matchKey);
@@ -188,11 +189,13 @@ function splitFreeAndVipPredictions(
     }
 
     if (vip.length < limits.vip) {
+      const boosted = clamp(row.confidence + 10, 68, 93);
       vip.push({
         ...row,
         prediction: ensureVipPredictionDiff(row.prediction),
-        confidence: clamp(row.confidence + 8, 65, 92),
-        odds: estimateOddsFromConfidence(clamp(row.confidence + 8, 65, 92)),
+        confidence: boosted,
+        probability: clamp(boosted + 3, 60, 95),
+        odds: estimateOddsFromConfidence(boosted),
         rationale_short: buildRationale(row, "vip"),
       });
     }
@@ -223,17 +226,20 @@ function buildTierPredictionsFromScraped(
     seen.add(key);
 
     if (tier === "vip") {
+      const boosted = clamp(row.confidence + 10, 68, 93);
       out.push({
         ...row,
         prediction: ensureVipPredictionDiff(row.prediction),
-        confidence: clamp(row.confidence + 8, 66, 92),
-        odds: estimateOddsFromConfidence(clamp(row.confidence + 8, 66, 92)),
+        confidence: boosted,
+        probability: clamp(boosted + 3, 60, 95),
+        odds: estimateOddsFromConfidence(boosted),
         rationale_short: buildRationale(row, "vip"),
       });
     } else {
       out.push({
         ...row,
-        confidence: clamp(row.confidence, 55, 78),
+        confidence: clamp(row.confidence, 58, 80),
+        probability: clamp(row.confidence + 5, 55, 86),
         rationale_short: buildRationale(row, "free"),
       });
     }
@@ -269,6 +275,7 @@ function buildPredictionFromFixture(fixture, tier = "free") {
     awayTeam: { name: fixture.awayTeam, logo: "" },
     prediction: market.market,
     confidence,
+    probability: clamp(confidence + (tier === "vip" ? 3 : 5), 50, 96),
     odds,
     score_prediction: "N/A",
     date: fixture.match_date,
@@ -294,12 +301,13 @@ function buildPredictionsFromFixtures(fixtures = [], limits = { free: 10, vip: 1
     }
     seen.add(key);
 
-    if (free.length < limits.free) {
-      free.push(buildPredictionFromFixture(fixture, "free"));
-      continue;
+    const freeMarketsPerMatch = Number.parseInt(process.env.FACTORY_RULE_MARKETS_PER_MATCH || "2", 10);
+    const vipMarketsPerMatch = Math.max(1, freeMarketsPerMatch + 1);
+    for (let i = 0; i < freeMarketsPerMatch && free.length < limits.free; i += 1) {
+      free.push(buildPredictionFromFixture({ ...fixture, eventId: `${fixture.eventId || key}-f${i}` }, "free"));
     }
-    if (vip.length < limits.vip) {
-      vip.push(buildPredictionFromFixture(fixture, "vip"));
+    for (let i = 0; i < vipMarketsPerMatch && vip.length < limits.vip; i += 1) {
+      vip.push(buildPredictionFromFixture({ ...fixture, eventId: `${fixture.eventId || key}-v${i}` }, "vip"));
     }
     if (free.length >= limits.free && vip.length >= limits.vip) {
       break;

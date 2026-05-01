@@ -3,6 +3,7 @@ const logger = require("../utils/logger");
 const { monitorLiveMatches } = require("./liveMonitor");
 const { collectAndStoreSportsNews } = require("../services/newsService");
 const { runFactoryCycleNow } = require("../services/factoryService");
+const { expireStaleVipSubscriptions } = require("../services/vipSubscriptionService");
 
 function startCronJobs() {
   if (process.env.ENABLE_CRON !== "true") {
@@ -34,6 +35,15 @@ function startCronJobs() {
       await collectAndStoreSportsNews();
     } catch (error) {
       logger.warn(`[CRON] Noticias falló: ${error.message}`);
+    }
+  });
+
+  // VIP con fecha de fin: bajar flag cuando venza.
+  cron.schedule("5 * * * *", async () => {
+    try {
+      await expireStaleVipSubscriptions();
+    } catch (error) {
+      logger.warn(`[CRON] expire VIP falló: ${error.message}`);
     }
   });
 
