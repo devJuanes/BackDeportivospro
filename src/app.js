@@ -12,7 +12,29 @@ const { getSupportedSports } = require("./services/sportsService");
 
 const app = express();
 
-app.use(cors());
+function buildCorsOrigins() {
+  const raw = (process.env.CORS_ORIGIN || "").trim();
+  if (!raw) return [];
+  return raw
+    .split(",")
+    .map((origin) => origin.trim().replace(/\/+$/, ""))
+    .filter(Boolean);
+}
+
+const allowedOrigins = buildCorsOrigins();
+const corsOptions = allowedOrigins.length
+  ? {
+      origin(origin, callback) {
+        // Permite clientes sin Origin (curl, health checks del servidor).
+        if (!origin) return callback(null, true);
+        const normalized = String(origin).trim().replace(/\/+$/, "");
+        if (allowedOrigins.includes(normalized)) return callback(null, true);
+        return callback(new Error("Origen no permitido por CORS"));
+      },
+    }
+  : undefined;
+
+app.use(cors(corsOptions));
 app.use(express.json({ limit: "1mb" }));
 app.use(morgan("dev"));
 
