@@ -5,6 +5,7 @@ const {
   updateFreeModerationStatus,
   getFreeSummaryToday,
 } = require("../models/predictionModel");
+const { db } = require("../config/database");
 const { sendMessage } = require("../config/whatsapp");
 
 function buildWhatsappMessage(prediction) {
@@ -89,10 +90,77 @@ async function getFreeDailySummary(req, res, next) {
   }
 }
 
+function slugToken(input) {
+  return String(input || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, " ")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+}
+
+function buildSeoSlug(home, away, league) {
+  const parts = [slugToken(home), "vs", slugToken(away), slugToken(league)].filter(Boolean);
+  return parts.join("-") || "pronostico-del-partido";
+}
+
+function toSeoUrlRow(row) {
+  const id = row?.id != null ? String(row.id) : "";
+  if (!id) return null;
+  const home = row.home_team_name || row.team_a || row.home_team || "local";
+  const away = row.away_team_name || row.team_b || row.away_team || "visitante";
+  const league = row.league || row.competition || "futbol";
+  return {
+    id,
+    slug: buildSeoSlug(home, away, league),
+    matchDate: row.match_date || null,
+    updatedAt: row.updated_at || row.created_at || null,
+  };
+}
+
+async function getSeoUrls(req, res, next) {
+  try {
+    const rawLimit = Number.parseInt(String(req.query.limit || ""), 10);
+    const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 50), 2000) : 500;
+    const out = new Map();
+
+    const tables = ["abet", "abetvip", "free_picks", "vip_picks"];
+    for (const table of tables) {
+      const q = db
+        .from(table)
+        .select("id,league,home_team_name,away_team_name,team_a,team_b,match_date,created_at,updated_at")
+        .order("created_at", { ascending: false })
+        .limit(limit);
+      const { data, error } = await q;
+      if (error) continue;
+      for (const row of data || []) {
+        const mapped = toSeoUrlRow(row);
+        if (!mapped) continue;
+        if (!out.has(mapped.id)) out.set(mapped.id, mapped);
+      }
+    }
+
+    const urls = [...out.values()].slice(0, limit);
+    return res.json({
+      total: urls.length,
+      urls: urls.map((u) => ({
+        path: `/pronosticos/${encodeURIComponent(u.id)}/${u.slug}`,
+        lastmod: u.updatedAt || undefined,
+        matchDate: u.matchDate || undefined,
+      })),
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
+
 module.exports = {
   listFreePredictions,
   createPrediction,
   updateFreeState,
   updateFreeModeration,
   getFreeDailySummary,
+  getSeoUrls,
 };
