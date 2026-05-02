@@ -7,10 +7,10 @@ const {
 const { createFreePrediction, getFreePredictions } = require("../models/predictionModel");
 const { createVipPrediction, getVipPredictions } = require("../models/vipModel");
 const { getTodayFixturesBySport } = require("../services/sportsService");
-const { prioritizeFixtures } = require("../services/fixturePriorityService");
+const { prioritizeFixtures, diversifyFixtures } = require("../services/fixturePriorityService");
 const { getPredictionSourcePolicy, toHost } = require("../services/sourceService");
 const { generateAiPredictionsFromFixtures } = require("../services/aiForecastService");
-const { mergeDedupeByKey } = require("../utils/predictionDedupe");
+const { mergeDedupeByKey, normalizePickLabel, fixtureTierDedupeKey } = require("../utils/predictionDedupe");
 const { formatDateInTimezone } = require("../utils/helpers");
 const logger = require("../utils/logger");
 
@@ -18,8 +18,8 @@ function buildMatchKey(row) {
   const home = row.homeTeam?.name || row.home_team_name || row.team_a || "";
   const away = row.awayTeam?.name || row.away_team_name || row.team_b || "";
   const date = row.date || row.match_date || "";
-  const market = row.prediction || row.pick_text || "";
-  return `${home.toLowerCase()}|${away.toLowerCase()}|${date}|${String(market).toLowerCase()}`;
+  const market = normalizePickLabel(row.prediction || row.pick_text || "");
+  return `${home.toLowerCase()}|${away.toLowerCase()}|${date}|${market}`;
 }
 
 async function runPredictionPipeline(options = {}) {
@@ -40,7 +40,16 @@ async function runPredictionPipeline(options = {}) {
   } catch (error) {
     logger.warn(`No se pudieron leer fixtures ${sport}: ${error.message}`);
   }
-  const prioritizedFixtures = sport === "football" ? prioritizeFixtures(fixtures) : fixtures;
+  const rotationPool = Number.parseInt(process.env.FACTORY_FIXTURE_ROTATION_POOL || "42", 10);
+  const rotationWindowMin = Number.parseInt(process.env.FACTORY_FIXTURE_ROTATION_WINDOW_MIN || "8", 10);
+  const rotationSeed = Math.floor(Date.now() / (Math.max(1, rotationWindowMin) * 60 * 1000));
+  const prioritizedFixtures =
+    sport === "football"
+      ? diversifyFixtures(prioritizeFixtures(fixtures), rotationPool, rotationSeed)
+      : fixtures;
+
+  const batchFree = Number.parseInt(process.env.FACTORY_BATCH_FREE || "48", 10);
+  const batchVip = Number.parseInt(process.env.FACTORY_BATCH_VIP || "48", 10);
 
   const scraped = sport === "football" && scraperEnabled ? await runAllPredictionScrapers() : [];
   if (sport === "football" && !scraperEnabled) {
@@ -68,27 +77,37 @@ async function runPredictionPipeline(options = {}) {
     return sourcePolicy.vip_hosts.length === 0 || sourcePolicy.vip_hosts.includes(host);
   });
 
-  const fromFixtures = buildPredictionsFromFixtures(prioritizedFixtures, { free: 10, vip: 10 });
+  const fromFixtures = buildPredictionsFromFixtures(prioritizedFixtures, {
+    free: batchFree,
+    vip: batchVip,
+  });
   const aiFromFixtures =
     sport === "football"
       ? await generateAiPredictionsFromFixtures(prioritizedFixtures)
       : { free: [], vip: [] };
-  const fromScrapers = splitFreeAndVipPredictions(scrapedForFree, sport, { free: 10, vip: 10 });
+  const fromScrapers = splitFreeAndVipPredictions(scrapedForFree, sport, { free: batchFree, vip: batchVip });
   const vipFromReliableScrapers = buildTierPredictionsFromScraped(
     scrapedForVip,
     sport,
     "vip",
-    10
+    batchVip
   );
 
-  /** IA DeepSeek primero; luego scrapers; último motor por fixtures — sin repetir mismo partido+mercado. */
+  /** IA → scrapers → motor fixtures; sin repetir mercado; luego un solo pick por partido/día y tier. */
   const freePicks = mergeDedupeByKey(
-    [aiFromFixtures.free, fromScrapers.free, fromFixtures.free],
-    buildMatchKey
+    [
+      mergeDedupeByKey([aiFromFixtures.free, fromScrapers.free, fromFixtures.free], buildMatchKey),
+    ],
+    fixtureTierDedupeKey
   );
   const vipPicks = mergeDedupeByKey(
-    [aiFromFixtures.vip, vipFromReliableScrapers, fromFixtures.vip, fromScrapers.vip],
-    buildMatchKey
+    [
+      mergeDedupeByKey(
+        [aiFromFixtures.vip, vipFromReliableScrapers, fromFixtures.vip, fromScrapers.vip],
+        buildMatchKey
+      ),
+    ],
+    fixtureTierDedupeKey
   );
 
   const [existingFree, existingVip] = await Promise.all([
@@ -98,26 +117,32 @@ async function runPredictionPipeline(options = {}) {
 
   const existingFreeKeys = new Set(existingFree.map(buildMatchKey));
   const existingVipKeys = new Set(existingVip.map(buildMatchKey));
+  const existingFixtureFree = new Set(existingFree.map((r) => fixtureTierDedupeKey(r)));
+  const existingFixtureVip = new Set(existingVip.map((r) => fixtureTierDedupeKey(r)));
 
   let insertedFree = 0;
   let insertedVip = 0;
   for (const pick of freePicks) {
     const key = buildMatchKey(pick);
-    if (existingFreeKeys.has(key)) {
+    const fk = fixtureTierDedupeKey(pick);
+    if (existingFixtureFree.has(fk) || existingFreeKeys.has(key)) {
       continue;
     }
     await createFreePrediction(pick);
     insertedFree += 1;
     existingFreeKeys.add(key);
+    existingFixtureFree.add(fk);
   }
   for (const pick of vipPicks) {
     const key = buildMatchKey(pick);
-    if (existingVipKeys.has(key) || existingFreeKeys.has(key)) {
+    const fk = fixtureTierDedupeKey(pick);
+    if (existingFixtureVip.has(fk) || existingVipKeys.has(key)) {
       continue;
     }
     await createVipPrediction(pick);
     insertedVip += 1;
     existingVipKeys.add(key);
+    existingFixtureVip.add(fk);
   }
 
   logger.info(

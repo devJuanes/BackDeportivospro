@@ -30,7 +30,9 @@ ${prediction.rationale_short || "Consenso estadístico del día."}`;
 
 async function listFreePredictions(req, res, next) {
   try {
-    const rows = await getFreePredictions(100, {
+    const rawLimit = Number.parseInt(String(req.query.limit || "100"), 10);
+    const limit = Number.isFinite(rawLimit) ? Math.min(400, Math.max(1, rawLimit)) : 100;
+    const rows = await getFreePredictions(limit, {
       todayOnly: req.query.today === "true",
       sport: req.query.sport,
       date: req.query.date,

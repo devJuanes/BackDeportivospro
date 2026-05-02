@@ -18,6 +18,9 @@ async function getVipPredictions(limit = 100, filters = {}) {
   if (filters.moderationStatus) {
     query = query.eq("moderation_status", filters.moderationStatus);
   }
+  if (filters.sport) {
+    query = query.eq("sport", String(filters.sport).trim().toLowerCase());
+  }
 
   let { data, error } = await query
     .order("created_at", { ascending: false })
@@ -27,6 +30,9 @@ async function getVipPredictions(limit = 100, filters = {}) {
     let fallbackQuery = db.from(VIP_TABLE).select("*");
     if (filters.todayOnly) {
       fallbackQuery = fallbackQuery.eq("match_date", filters.date || todayIsoDate());
+    }
+    if (filters.sport) {
+      fallbackQuery = fallbackQuery.eq("sport", String(filters.sport).trim().toLowerCase());
     }
     const fallback = await fallbackQuery.order("created_at", { ascending: false }).limit(limit);
     data = fallback.data;

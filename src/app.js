@@ -10,30 +10,45 @@ const whatsappRoutes = require("./routes/whatsappRoutes");
 const paymentsRoutes = require("./routes/paymentsRoutes");
 const blogRoutes = require("./routes/blogRoutes");
 const { getSupportedSports } = require("./services/sportsService");
+const logger = require("./utils/logger");
 
 const app = express();
 
+/** Orígenes del front MatuPicks siempre permitidos (además de `CORS_ORIGIN` en .env). */
+const DEFAULT_MATUPICKS_ORIGINS = [
+  "https://matupicks.app",
+  "https://www.matupicks.app",
+  "http://localhost:5173",
+  "http://localhost:5174",
+];
+
 function buildCorsOrigins() {
   const raw = (process.env.CORS_ORIGIN || "").trim();
-  if (!raw) return [];
-  return raw
-    .split(",")
-    .map((origin) => origin.trim().replace(/\/+$/, ""))
-    .filter(Boolean);
+  const fromEnv = raw
+    ? raw
+        .split(",")
+        .map((origin) => origin.trim().replace(/\/+$/, ""))
+        .filter(Boolean)
+    : [];
+  return [...new Set([...fromEnv, ...DEFAULT_MATUPICKS_ORIGINS])];
 }
 
 const allowedOrigins = buildCorsOrigins();
-const corsOptions = allowedOrigins.length
-  ? {
-      origin(origin, callback) {
-        // Permite clientes sin Origin (curl, health checks del servidor).
-        if (!origin) return callback(null, true);
-        const normalized = String(origin).trim().replace(/\/+$/, "");
-        if (allowedOrigins.includes(normalized)) return callback(null, true);
-        return callback(new Error("Origen no permitido por CORS"));
-      },
+
+const corsOptions = {
+  origin(origin, callback) {
+    if (!origin) return callback(null, true);
+    const normalized = String(origin).trim().replace(/\/+$/, "");
+    if (allowedOrigins.includes(normalized)) {
+      return callback(null, true);
     }
-  : undefined;
+    logger.warn(`[cors] Origen no permitido: ${normalized} (configura CORS_ORIGIN en el API si falta)`);
+    return callback(null, false);
+  },
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "x-blog-cron-secret"],
+  optionsSuccessStatus: 204,
+};
 
 app.use(cors(corsOptions));
 app.use(express.json({ limit: "1mb" }));

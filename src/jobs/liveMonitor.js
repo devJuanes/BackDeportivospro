@@ -11,6 +11,8 @@ const logger = require("../utils/logger");
 
 const recentAlerts = new Map();
 
+const LIVE_ALERT_COOLDOWN_MS = Number.parseInt(process.env.LIVE_ALERT_COOLDOWN_MS || `${8 * 60 * 1000}`, 10);
+
 function shouldCreateAlert(alert) {
   const key = liveSignalDedupeKey(
     alert.sport,
@@ -21,7 +23,7 @@ function shouldCreateAlert(alert) {
   const now = Date.now();
   const lastTs = recentAlerts.get(key) || 0;
   const diffMs = now - lastTs;
-  if (diffMs < 12 * 60 * 1000) {
+  if (diffMs < Math.max(120000, LIVE_ALERT_COOLDOWN_MS)) {
     return false;
   }
   recentAlerts.set(key, now);
@@ -51,7 +53,7 @@ async function monitorLiveMatches() {
     logger.warn(`Reconcile live omitido: ${error.message}`);
   }
 
-  const aiLiveLimit = Number.parseInt(process.env.FACTORY_AI_LIVE_MATCH_LIMIT || "5", 10);
+  const aiLiveLimit = Number.parseInt(process.env.FACTORY_AI_LIVE_MATCH_LIMIT || "22", 10);
   let aiLiveCalls = 0;
   let created = 0;
 

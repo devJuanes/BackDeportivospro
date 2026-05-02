@@ -41,7 +41,7 @@ function sanitizePick(pick, tier, fixture) {
 }
 
 function buildPrompt(fixture) {
-  const marketsPerMatch = Number.parseInt(process.env.FACTORY_MARKETS_PER_MATCH || "3", 10);
+  const marketsPerMatch = Number.parseInt(process.env.FACTORY_MARKETS_PER_MATCH || "1", 10);
   return [
     "Eres un analista deportivo experto.",
     "Debes responder SOLO JSON válido sin markdown.",
@@ -219,9 +219,9 @@ async function generateLiveInsightFromMatch(match, heuristicSuggestion) {
 
 async function generateAiPredictionsFromFixtures(fixtures = []) {
   if (!isAiEnabled()) return { free: [], vip: [] };
-  const limit = Number.parseInt(process.env.FACTORY_AI_MATCH_LIMIT || "6", 10);
+  const limit = Number.parseInt(process.env.FACTORY_AI_MATCH_LIMIT || "14", 10);
   const selected = fixtures.slice(0, Math.max(1, limit));
-  const marketsPerMatch = Number.parseInt(process.env.FACTORY_MARKETS_PER_MATCH || "3", 10);
+  const marketsPerMatch = Number.parseInt(process.env.FACTORY_MARKETS_PER_MATCH || "1", 10);
   const free = [];
   const vip = [];
   for (const fixture of selected) {

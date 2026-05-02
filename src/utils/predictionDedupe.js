@@ -17,6 +17,24 @@ function pairKey(home = "", away = "") {
   return `${String(home).toLowerCase().trim()}|${String(away).toLowerCase().trim()}`;
 }
 
+function normalizeTeamToken(name = "") {
+  return String(name || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** Un pronóstico por partido y día (free o vip se filtra aparte en el pipeline). */
+function fixtureTierDedupeKey(pick) {
+  const home = normalizeTeamToken(pick.homeTeam?.name || pick.home_team_name || pick.team_a || "");
+  const away = normalizeTeamToken(pick.awayTeam?.name || pick.away_team_name || pick.team_b || "");
+  const date = String(pick.date || pick.match_date || "").slice(0, 10);
+  const sport = String(pick.sport || "football").toLowerCase();
+  return `${sport}|${pairKey(home, away)}|${date}`;
+}
+
 /** Duplicado lógico: mismo cruce + mismo mercado (texto normalizado). */
 function liveSignalDedupeKey(sport, home, away, prediction) {
   const s = String(sport || "football").toLowerCase();
@@ -45,6 +63,8 @@ function mergeDedupeByKey(lists, keyFn) {
 module.exports = {
   normalizePickLabel,
   pairKey,
+  normalizeTeamToken,
+  fixtureTierDedupeKey,
   liveSignalDedupeKey,
   mergeDedupeByKey,
 };

@@ -14,7 +14,7 @@ function startCronJobs() {
   }
 
   // Fábrica continua: ciclo completo con lock anti-solape.
-  cron.schedule("*/5 * * * *", async () => {
+  cron.schedule("*/3 * * * *", async () => {
     try {
       await runFactoryCycleNow({ includeNews: false });
     } catch (error) {

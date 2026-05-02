@@ -301,7 +301,7 @@ function buildPredictionsFromFixtures(fixtures = [], limits = { free: 10, vip: 1
     }
     seen.add(key);
 
-    const freeMarketsPerMatch = Number.parseInt(process.env.FACTORY_RULE_MARKETS_PER_MATCH || "2", 10);
+    const freeMarketsPerMatch = Number.parseInt(process.env.FACTORY_RULE_MARKETS_PER_MATCH || "1", 10);
     const vipMarketsPerMatch = Math.max(1, freeMarketsPerMatch + 1);
     for (let i = 0; i < freeMarketsPerMatch && free.length < limits.free; i += 1) {
       free.push(buildPredictionFromFixture({ ...fixture, eventId: `${fixture.eventId || key}-f${i}` }, "free"));
@@ -322,8 +322,10 @@ function generateLiveSuggestion(match) {
   const diff = Math.abs((match.homeGoals || 0) - (match.awayGoals || 0));
   const minute = match.minute || 0;
 
-  // Filtro de calidad: si no hay contexto suficiente, no emitir señal.
-  if (minute <= 0) {
+  if (minute < 0) {
+    return null;
+  }
+  if (minute === 0 && total === 0) {
     return null;
   }
 
@@ -376,6 +378,62 @@ function generateLiveSuggestion(match) {
       prediction: "Más de 169.5 puntos en vivo",
       confidence: 69,
       odds: 1.64,
+    };
+  }
+
+  if (match.sport === "football" && minute >= 16 && minute <= 44 && total >= 2 && diff <= 2) {
+    return {
+      sport: match.sport || "football",
+      league: match.league || "Live League",
+      home_team_name: match.homeTeam,
+      away_team_name: match.awayTeam,
+      minute,
+      prediction: "Más de 2.5 goles",
+      confidence: 64,
+      odds: 1.58,
+    };
+  }
+
+  const hg = match.homeGoals || 0;
+  const ag = match.awayGoals || 0;
+  if (match.sport === "football" && minute >= 22 && minute <= 78) {
+    if ((hg === 0 && ag >= 2) || (ag === 0 && hg >= 2)) {
+      return {
+        sport: match.sport || "football",
+        league: match.league || "Live League",
+        home_team_name: match.homeTeam,
+        away_team_name: match.awayTeam,
+        minute,
+        prediction: "Ambos equipos marcan: SI",
+        confidence: 62,
+        odds: 1.74,
+      };
+    }
+  }
+
+  if (match.sport === "football" && minute >= 48 && minute <= 82 && total === 1 && diff === 1) {
+    return {
+      sport: match.sport || "football",
+      league: match.league || "Live League",
+      home_team_name: match.homeTeam,
+      away_team_name: match.awayTeam,
+      minute,
+      prediction: "Más de 1.5 goles",
+      confidence: 63,
+      odds: 1.52,
+    };
+  }
+
+  if (match.sport === "football" && minute >= 52 && minute <= 84 && total >= 3 && diff <= 2) {
+    return {
+      sport: match.sport || "football",
+      league: match.league || "Live League",
+      home_team_name: match.homeTeam,
+      away_team_name: match.awayTeam,
+      minute,
+      prediction: "Más de 3.5 goles",
+      confidence: 61,
+      odds: 1.68,
     };
   }
 
