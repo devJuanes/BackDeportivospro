@@ -165,7 +165,7 @@ async function generatePreviaBlogsForDate(matchDate, maxArticles = 4) {
   const ranked = [
     ...vip.map((r) => ({ ...r, _tier: "vip" })),
     ...free.map((r) => ({ ...r, _tier: "free" })),
-  ].sort((a, b) => (Number(b.confidence) || 0) - (Number(a.confidence) || 0)));
+  ].sort((a, b) => (Number(b.confidence) || 0) - (Number(a.confidence) || 0));
 
   const candidates = [];
   const seenMatch = new Set();
