@@ -1,10 +1,13 @@
-const { clamp } = require("../utils/helpers");
+const { clamp, formatDateInTimezone } = require("../utils/helpers");
 
 const DEFAULT_PRIORITY_TERMS = [
   "libertadores",
   "champions",
   "premier",
   "la liga",
+  "laliga",
+  "uefa",
+  "ucl",
   "serie a",
   "bundesliga",
   "ligue 1",
@@ -56,11 +59,38 @@ function toHourNumber(hour = "00:00") {
   return hh * 60 + mm;
 }
 
-function computePriorityScore(fixture, terms) {
+function nowMinutesInFactoryTz(timeZone = "America/Bogota") {
+  const formatter = new Intl.DateTimeFormat("en-GB", {
+    timeZone,
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+  const parts = formatter.formatToParts(new Date());
+  const hh = Number.parseInt(parts.find((p) => p.type === "hour")?.value || "0", 10);
+  const mm = Number.parseInt(parts.find((p) => p.type === "minute")?.value || "0", 10);
+  if (Number.isNaN(hh) || Number.isNaN(mm)) return 0;
+  return hh * 60 + mm;
+}
+
+function computePriorityScore(fixture, terms, calendarDayIso) {
   const text = buildText(fixture);
   let score = 0;
   for (const term of terms) {
     if (text.includes(term)) score += 18;
+  }
+  const tz = process.env.FACTORY_TIMEZONE || "America/Bogota";
+  if (
+    calendarDayIso &&
+    fixture.match_date === calendarDayIso &&
+    fixture.status === "pre"
+  ) {
+    const kickMin = toHourNumber(fixture.match_hour || "00:00");
+    const nowMin = nowMinutesInFactoryTz(tz);
+    let deltaMin = kickMin - nowMin;
+    if (deltaMin >= 0 && deltaMin <= 240) {
+      score += Math.round((240 - deltaMin) / 8);
+    }
   }
   const isLive = fixture.status === "in";
   if (isLive) score += 20;
@@ -73,12 +103,15 @@ function computePriorityScore(fixture, terms) {
   return score;
 }
 
-function prioritizeFixtures(fixtures = []) {
+function prioritizeFixtures(fixtures = [], calendarDayIso = null) {
   const terms = getPriorityTerms();
+  const dayIso =
+    calendarDayIso ||
+    formatDateInTimezone(new Date(), process.env.FACTORY_TIMEZONE || "America/Bogota");
   return [...fixtures]
     .map((fixture) => ({
       ...fixture,
-      priority_score: computePriorityScore(fixture, terms),
+      priority_score: computePriorityScore(fixture, terms, dayIso),
     }))
     .sort((a, b) => b.priority_score - a.priority_score);
 }

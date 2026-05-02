@@ -20,7 +20,20 @@ const DEFAULT_MATUPICKS_ORIGINS = [
   "https://www.matupicks.app",
   "http://localhost:5173",
   "http://localhost:5174",
+  "http://127.0.0.1:5173",
+  "http://127.0.0.1:5174",
 ];
+
+/** Admin/Fábrica desde Vite en tu máquina contra API en producción (evita depender solo del .env del servidor). */
+function isLocalDevHttpOrigin(origin) {
+  try {
+    const u = new URL(String(origin).trim());
+    if (u.protocol !== "http:") return false;
+    return u.hostname === "localhost" || u.hostname === "127.0.0.1";
+  } catch {
+    return false;
+  }
+}
 
 function buildCorsOrigins() {
   const raw = (process.env.CORS_ORIGIN || "").trim();
@@ -39,7 +52,7 @@ const corsOptions = {
   origin(origin, callback) {
     if (!origin) return callback(null, true);
     const normalized = String(origin).trim().replace(/\/+$/, "");
-    if (allowedOrigins.includes(normalized)) {
+    if (allowedOrigins.includes(normalized) || isLocalDevHttpOrigin(normalized)) {
       return callback(null, true);
     }
     logger.warn(`[cors] Origen no permitido: ${normalized} (configura CORS_ORIGIN en el API si falta)`);

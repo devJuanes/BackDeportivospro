@@ -43,9 +43,13 @@ async function runPredictionPipeline(options = {}) {
   const rotationPool = Number.parseInt(process.env.FACTORY_FIXTURE_ROTATION_POOL || "42", 10);
   const rotationWindowMin = Number.parseInt(process.env.FACTORY_FIXTURE_ROTATION_WINDOW_MIN || "8", 10);
   const rotationSeed = Math.floor(Date.now() / (Math.max(1, rotationWindowMin) * 60 * 1000));
+  /** Orden real por liga/importancia (sin barajar): la IA debe verse primero en estos partidos. */
+  const fixturesByPriority =
+    sport === "football" ? prioritizeFixtures(fixtures, calendarDayIso) : fixtures;
+  /** Lista barajada solo para ampliar cobertura en motor/scrapers; no debe “esconder” los top a la IA. */
   const prioritizedFixtures =
     sport === "football"
-      ? diversifyFixtures(prioritizeFixtures(fixtures), rotationPool, rotationSeed)
+      ? diversifyFixtures(fixturesByPriority, rotationPool, rotationSeed)
       : fixtures;
 
   const batchFree = Number.parseInt(process.env.FACTORY_BATCH_FREE || "48", 10);
@@ -83,7 +87,7 @@ async function runPredictionPipeline(options = {}) {
   });
   const aiFromFixtures =
     sport === "football"
-      ? await generateAiPredictionsFromFixtures(prioritizedFixtures)
+      ? await generateAiPredictionsFromFixtures(fixturesByPriority)
       : { free: [], vip: [] };
   const fromScrapers = splitFreeAndVipPredictions(scrapedForFree, sport, { free: batchFree, vip: batchVip });
   const vipFromReliableScrapers = buildTierPredictionsFromScraped(
