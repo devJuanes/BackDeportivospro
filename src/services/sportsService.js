@@ -1,6 +1,7 @@
 const axios = require("axios");
 const logger = require("../utils/logger");
 const { upsertFixtures, getFixturesByDateSport } = require("../models/fixtureModel");
+const { getEventsByDay: getTheSportsDbEventsByDay } = require("./theSportsDbService");
 const {
   formatDateInTimezone,
   formatHourInTimezone,
@@ -137,12 +138,39 @@ async function getTodayFixturesBySport(sport = "football", dateIso = null) {
     })
     .filter((row) => row.match_date === effectiveDateIso);
 
-  if (fixturesFromSource.length > 0) {
+  /** Respaldo: TheSportsDB para días en los que ESPN no devuelve nada (típico de ligas Latam). */
+  let merged = [...fixturesFromSource];
+  try {
+    if (process.env.THESPORTSDB_DISABLED !== "true") {
+      const tsdb = await getTheSportsDbEventsByDay(sport, effectiveDateIso, timezone);
+      if (tsdb.length > 0) {
+        const seen = new Set(
+          merged.map((r) => `${r.homeTeam.toLowerCase()}|${r.awayTeam.toLowerCase()}`)
+        );
+        for (const row of tsdb) {
+          const k = `${row.homeTeam.toLowerCase()}|${row.awayTeam.toLowerCase()}`;
+          if (!seen.has(k)) {
+            merged.push(row);
+            seen.add(k);
+          }
+        }
+        if (fixturesFromSource.length === 0) {
+          logger.info(`TheSportsDB cubrió ${tsdb.length} fixtures (${sport}, ${effectiveDateIso}) — ESPN no devolvió eventos.`);
+        } else if (tsdb.length > 0) {
+          logger.info(`TheSportsDB añadió ${merged.length - fixturesFromSource.length} fixtures extra (${sport}, ${effectiveDateIso}).`);
+        }
+      }
+    }
+  } catch (error) {
+    logger.warn(`TheSportsDB respaldo falló (${sport}): ${error.message}`);
+  }
+
+  if (merged.length > 0) {
     try {
       await upsertFixtures(
-        fixturesFromSource.map((row) => ({
+        merged.map((row) => ({
           ...row,
-          source: "espn",
+          source: row.source || "espn",
           source_event_id: row.eventId,
           raw_payload: null,
         }))
@@ -150,7 +178,7 @@ async function getTodayFixturesBySport(sport = "football", dateIso = null) {
     } catch (error) {
       logger.warn(`No se pudo guardar caché de fixtures (${sport}): ${error.message}`);
     }
-    return fixturesFromSource;
+    return merged;
   }
 
   try {

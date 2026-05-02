@@ -126,7 +126,40 @@ async function getSeoUrls(req, res, next) {
   try {
     const rawLimit = Number.parseInt(String(req.query.limit || ""), 10);
     const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 50), 2000) : 500;
-    const out = new Map();
+    /** Dedupe por URL path (abetlive usa `/pronosticos/live/...`). */
+    const seenPath = new Set();
+    const urlEntries = [];
+
+    function pushStandard(row) {
+      const mapped = toSeoUrlRow(row);
+      if (!mapped) return;
+      const path = `/pronosticos/${encodeURIComponent(mapped.id)}/${mapped.slug}`;
+      if (seenPath.has(path)) return;
+      seenPath.add(path);
+      urlEntries.push({
+        path,
+        lastmod: mapped.updatedAt || undefined,
+        matchDate: mapped.matchDate || undefined,
+      });
+    }
+
+    /** Misma lógica de slug que el front: `buildSeoSlug(home, away, league + ' live')`. */
+    function pushLive(row) {
+      const id = row?.id != null ? String(row.id) : "";
+      if (!id) return;
+      const home = row.home_team_name || row.team_a || "local";
+      const away = row.away_team_name || row.team_b || "visitante";
+      const league = row.league || row.competition || "futbol";
+      const slug = buildSeoSlug(home, away, `${league} live`);
+      const path = `/pronosticos/live/${encodeURIComponent(id)}/${slug}`;
+      if (seenPath.has(path)) return;
+      seenPath.add(path);
+      urlEntries.push({
+        path,
+        lastmod: row.updated_at || row.created_at || undefined,
+        matchDate: row.match_date || undefined,
+      });
+    }
 
     const tables = ["abet", "abetvip", "free_picks", "vip_picks"];
     for (const table of tables) {
@@ -138,20 +171,24 @@ async function getSeoUrls(req, res, next) {
       const { data, error } = await q;
       if (error) continue;
       for (const row of data || []) {
-        const mapped = toSeoUrlRow(row);
-        if (!mapped) continue;
-        if (!out.has(mapped.id)) out.set(mapped.id, mapped);
+        pushStandard(row);
       }
     }
 
-    const urls = [...out.values()].slice(0, limit);
+    const liveQ = await db
+      .from("abetlive")
+      .select("id,league,home_team_name,away_team_name,created_at,updated_at")
+      .order("created_at", { ascending: false })
+      .limit(limit);
+    if (!liveQ.error) {
+      for (const row of liveQ.data || []) {
+        pushLive(row);
+      }
+    }
+
     return res.json({
-      total: urls.length,
-      urls: urls.map((u) => ({
-        path: `/pronosticos/${encodeURIComponent(u.id)}/${u.slug}`,
-        lastmod: u.updatedAt || undefined,
-        matchDate: u.matchDate || undefined,
-      })),
+      total: Math.min(urlEntries.length, limit),
+      urls: urlEntries.slice(0, limit),
     });
   } catch (error) {
     return next(error);

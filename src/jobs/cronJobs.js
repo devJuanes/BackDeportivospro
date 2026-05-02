@@ -32,9 +32,11 @@ function startCronJobs() {
   const newsCron = process.env.CRON_NEWS_EXPRESSION?.trim() || "*/45 * * * *";
 
   // Fábrica: por defecto cada 15 min (VPS pequeño). Override CRON_FACTORY_EXPRESSION.
+  // includeNews=true en el cron principal: integra también scraping de noticias del ciclo,
+  // así no dependemos solo del run-now manual del admin.
   scheduleSafe(factoryCron, "*/15 * * * *", "factory", async () => {
     try {
-      await runFactoryCycleNow({ includeNews: false });
+      await runFactoryCycleNow({ includeNews: true });
     } catch (error) {
       logger.warn(`[CRON] Factory cycle falló: ${error.message}`);
     }
@@ -65,23 +67,27 @@ function startCronJobs() {
     }
   });
 
-  // Blog IA: previas del día (requiere FACTORY_AI_ENABLED + FACTORY_AI_API_KEY).
-  cron.schedule("15 8,14,20 * * *", async () => {
+  // Blog IA: previas del día. Cada 2h a los :15 (antes solo 3 veces al día y solo 4 artículos).
+  // Configurable: BLOG_PREVIAS_CRON, BLOG_PREVIAS_MAX (default 12).
+  const previasCron = process.env.BLOG_PREVIAS_CRON?.trim() || "15 */2 * * *";
+  const previasMax = Number.parseInt(process.env.BLOG_PREVIAS_MAX || "12", 10);
+  scheduleSafe(previasCron, "15 */2 * * *", "blog_previas", async () => {
     try {
       if (!isAiEnabled()) return;
-      const r = await generatePreviaBlogsForDate(todayIsoDate(), 4);
-      if (r.created > 0) logger.info(`[CRON] Blog previas: created=${r.created}`);
+      const r = await generatePreviaBlogsForDate(todayIsoDate(), previasMax);
+      if (r.created > 0) logger.info(`[CRON] Blog previas: created=${r.created}/${previasMax}`);
     } catch (error) {
       logger.warn(`[CRON] Blog previas falló: ${error.message}`);
     }
   });
 
-  // Blog IA: crónicas post-partido (picks cerrados sin recap).
+  // Blog IA: crónicas post-partido (picks cerrados sin recap). Cada hora a los :25 — más recaps por ciclo.
+  const recapsMax = Number.parseInt(process.env.BLOG_RECAPS_MAX || "6", 10);
   cron.schedule("25 * * * *", async () => {
     try {
       if (!isAiEnabled()) return;
-      const r = await generateRecapBlogsOnce(2);
-      if (r.created > 0) logger.info(`[CRON] Blog recaps: created=${r.created}`);
+      const r = await generateRecapBlogsOnce(recapsMax);
+      if (r.created > 0) logger.info(`[CRON] Blog recaps: created=${r.created}/${recapsMax}`);
     } catch (error) {
       logger.warn(`[CRON] Blog recaps falló: ${error.message}`);
     }
