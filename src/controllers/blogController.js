@@ -27,8 +27,8 @@ async function postGeneratePrevias(req, res, next) {
     const matchDate = String(raw).trim();
     const day = matchDate && /^\d{4}-\d{2}-\d{2}$/.test(matchDate) ? matchDate : todayIsoDate();
     const maxArticles = Math.min(
-      8,
-      Math.max(1, Number.parseInt(String(req.body?.max ?? req.query?.max ?? "4"), 10) || 4),
+      24,
+      Math.max(1, Number.parseInt(String(req.body?.max ?? req.query?.max ?? "12"), 10) || 12),
     );
     const result = await generatePreviaBlogsForDate(day, maxArticles);
     res.json({ ok: true, ...result });
@@ -46,8 +46,8 @@ async function postGenerateRecaps(req, res, next) {
       });
     }
     const maxPicks = Math.min(
-      6,
-      Math.max(1, Number.parseInt(String(req.body?.max ?? req.query?.max ?? "3"), 10) || 3),
+      12,
+      Math.max(1, Number.parseInt(String(req.body?.max ?? req.query?.max ?? "6"), 10) || 6),
     );
     const result = await generateRecapBlogsOnce(maxPicks);
     res.json({ ok: true, ...result });
