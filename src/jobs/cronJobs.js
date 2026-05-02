@@ -7,14 +7,32 @@ const { expireStaleVipSubscriptions } = require("../services/vipSubscriptionServ
 const { generatePreviaBlogsForDate, generateRecapBlogsOnce, todayIsoDate } = require("../services/blogGenerationService");
 const { isAiEnabled } = require("../services/aiForecastService");
 
+function scheduleSafe(expression, fallback, label, task) {
+  const expr = String(expression || "").trim() || fallback;
+  try {
+    cron.schedule(expr, task);
+    logger.info(`[CRON] ${label}: ${expr}`);
+    return true;
+  } catch (error) {
+    logger.warn(`[CRON] ${label}: expresión inválida "${expr}" (${error.message}). Uso fallback ${fallback}`);
+    cron.schedule(fallback, task);
+    logger.info(`[CRON] ${label}: ${fallback} (fallback)`);
+    return false;
+  }
+}
+
 function startCronJobs() {
   if (process.env.ENABLE_CRON !== "true") {
     logger.info("Cron jobs deshabilitados por configuración.");
     return;
   }
 
-  // Fábrica continua: ciclo completo con lock anti-solape.
-  cron.schedule("*/3 * * * *", async () => {
+  const factoryCron = process.env.CRON_FACTORY_EXPRESSION?.trim() || "*/15 * * * *";
+  const liveCron = process.env.CRON_LIVE_EXPRESSION?.trim() || "*/5 * * * *";
+  const newsCron = process.env.CRON_NEWS_EXPRESSION?.trim() || "*/45 * * * *";
+
+  // Fábrica: por defecto cada 15 min (VPS pequeño). Override CRON_FACTORY_EXPRESSION.
+  scheduleSafe(factoryCron, "*/15 * * * *", "factory", async () => {
     try {
       await runFactoryCycleNow({ includeNews: false });
     } catch (error) {
@@ -22,8 +40,7 @@ function startCronJobs() {
     }
   });
 
-  // Monitor de vivo cada minuto.
-  cron.schedule("* * * * *", async () => {
+  scheduleSafe(liveCron, "*/5 * * * *", "live_monitor", async () => {
     try {
       await monitorLiveMatches();
     } catch (error) {
@@ -31,8 +48,7 @@ function startCronJobs() {
     }
   });
 
-  // Noticias y contexto cada 30 minutos.
-  cron.schedule("*/30 * * * *", async () => {
+  scheduleSafe(newsCron, "*/45 * * * *", "news", async () => {
     try {
       await collectAndStoreSportsNews();
     } catch (error) {

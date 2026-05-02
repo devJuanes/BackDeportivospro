@@ -47,17 +47,23 @@ async function runFactoryCycleNow(options = {}) {
   try {
     const sports = getFactorySports();
     const enableSourceHealth = process.env.FACTORY_ENABLE_EXTERNAL_SCRAPERS === "true";
+    /** Por defecto false: el live ya corre en su propio cron; duplicarlo aquí satura CPU en VPS pequeños. */
+    const includeLiveInCycle = process.env.FACTORY_CYCLE_INCLUDES_LIVE === "true";
     const matchDate =
       typeof options.matchDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(options.matchDate.trim())
         ? options.matchDate.trim()
         : null;
 
-    const [pipelineSettled, liveCount, news, sourceHealth] = await Promise.all([
+    const [pipelineSettled, news, sourceHealth] = await Promise.all([
       Promise.allSettled(sports.map((sport) => runPredictionPipeline({ sport, matchDate }))),
-      monitorLiveMatches(),
       includeNews ? collectAndStoreSportsNews() : Promise.resolve([]),
       enableSourceHealth ? refreshSourcesHealth("football", 10) : Promise.resolve([]),
     ]);
+
+    let liveCount = 0;
+    if (includeLiveInCycle) {
+      liveCount = await monitorLiveMatches();
+    }
 
     const pipelineBySport = pipelineSettled
       .filter((r) => r.status === "fulfilled")

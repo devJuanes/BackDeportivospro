@@ -8,6 +8,10 @@ function isAiEnabled() {
   return process.env.FACTORY_AI_ENABLED === "true";
 }
 
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function toSlug(value = "") {
   return String(value)
     .toLowerCase()
@@ -219,12 +223,14 @@ async function generateLiveInsightFromMatch(match, heuristicSuggestion) {
 
 async function generateAiPredictionsFromFixtures(fixtures = []) {
   if (!isAiEnabled()) return { free: [], vip: [] };
-  const limit = Number.parseInt(process.env.FACTORY_AI_MATCH_LIMIT || "14", 10);
+  const limit = Number.parseInt(process.env.FACTORY_AI_MATCH_LIMIT || "6", 10);
   const selected = fixtures.slice(0, Math.max(1, limit));
   const marketsPerMatch = Number.parseInt(process.env.FACTORY_MARKETS_PER_MATCH || "1", 10);
+  const gapMs = Number.parseInt(process.env.FACTORY_AI_DELAY_MS || "2500", 10);
   const free = [];
   const vip = [];
-  for (const fixture of selected) {
+  for (let i = 0; i < selected.length; i += 1) {
+    const fixture = selected[i];
     try {
       const aiJson = await callChatModel(buildPrompt(fixture));
       const freeRows = Array.isArray(aiJson?.free) ? aiJson.free : aiJson?.free ? [aiJson.free] : [];
@@ -237,6 +243,9 @@ async function generateAiPredictionsFromFixtures(fixtures = []) {
       });
     } catch (error) {
       logger.warn(`IA falló para ${fixture.homeTeam} vs ${fixture.awayTeam}: ${error.message}`);
+    }
+    if (gapMs > 0 && i < selected.length - 1) {
+      await delay(gapMs);
     }
   }
 

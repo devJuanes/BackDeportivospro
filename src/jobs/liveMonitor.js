@@ -9,6 +9,10 @@ const { getLiveMatchesBySport, getFactorySports } = require("../services/sportsS
 const { liveSignalDedupeKey } = require("../utils/predictionDedupe");
 const logger = require("../utils/logger");
 
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 const recentAlerts = new Map();
 
 const LIVE_ALERT_COOLDOWN_MS = Number.parseInt(process.env.LIVE_ALERT_COOLDOWN_MS || `${8 * 60 * 1000}`, 10);
@@ -53,7 +57,8 @@ async function monitorLiveMatches() {
     logger.warn(`Reconcile live omitido: ${error.message}`);
   }
 
-  const aiLiveLimit = Number.parseInt(process.env.FACTORY_AI_LIVE_MATCH_LIMIT || "22", 10);
+  const aiLiveLimit = Number.parseInt(process.env.FACTORY_AI_LIVE_MATCH_LIMIT || "5", 10);
+  const gapMs = Number.parseInt(process.env.FACTORY_AI_DELAY_MS || "2500", 10);
   let aiLiveCalls = 0;
   let created = 0;
 
@@ -75,6 +80,9 @@ async function monitorLiveMatches() {
           odds: refined.odds ?? heuristic.odds,
           ai_rationale: refined.analysis,
         };
+      }
+      if (gapMs > 0 && aiLiveCalls < aiLiveLimit) {
+        await delay(gapMs);
       }
     }
 
