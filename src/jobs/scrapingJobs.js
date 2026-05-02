@@ -11,6 +11,7 @@ const { prioritizeFixtures } = require("../services/fixturePriorityService");
 const { getPredictionSourcePolicy, toHost } = require("../services/sourceService");
 const { generateAiPredictionsFromFixtures } = require("../services/aiForecastService");
 const { mergeDedupeByKey } = require("../utils/predictionDedupe");
+const { formatDateInTimezone } = require("../utils/helpers");
 const logger = require("../utils/logger");
 
 function buildMatchKey(row) {
@@ -23,11 +24,19 @@ function buildMatchKey(row) {
 
 async function runPredictionPipeline(options = {}) {
   const sport = options.sport || "football";
-  logger.info(`Iniciando pipeline de scraping + predicción (${sport})...`);
+  const timezone = process.env.FACTORY_TIMEZONE || "America/Bogota";
+  const matchDateIso =
+    typeof options.matchDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(options.matchDate.trim())
+      ? options.matchDate.trim()
+      : null;
+  const calendarDayIso = matchDateIso || formatDateInTimezone(new Date(), timezone);
+  logger.info(
+    `Iniciando pipeline de scraping + predicción (${sport}, día=${calendarDayIso})...`
+  );
   const scraperEnabled = process.env.FACTORY_ENABLE_EXTERNAL_SCRAPERS === "true";
   let fixtures = [];
   try {
-    fixtures = await getTodayFixturesBySport(sport);
+    fixtures = await getTodayFixturesBySport(sport, matchDateIso || undefined);
   } catch (error) {
     logger.warn(`No se pudieron leer fixtures ${sport}: ${error.message}`);
   }
@@ -83,8 +92,8 @@ async function runPredictionPipeline(options = {}) {
   );
 
   const [existingFree, existingVip] = await Promise.all([
-    getFreePredictions(500, { todayOnly: true, sport }),
-    getVipPredictions(500, { todayOnly: true, sport }),
+    getFreePredictions(500, { todayOnly: true, date: calendarDayIso, sport }),
+    getVipPredictions(500, { todayOnly: true, date: calendarDayIso, sport }),
   ]);
 
   const existingFreeKeys = new Set(existingFree.map(buildMatchKey));

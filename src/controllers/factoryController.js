@@ -5,6 +5,7 @@ const {
 } = require("../services/factoryService");
 const { listSources, syncDefaultSources } = require("../services/sourceService");
 const { isWhatsAppReady } = require("../config/whatsapp");
+const { isAdminBearer } = require("../utils/jwtAdmin");
 
 async function getStatus(req, res, next) {
   try {
@@ -20,7 +21,24 @@ async function getStatus(req, res, next) {
 
 async function runNow(req, res, next) {
   try {
-    const result = await runFactoryCycleNow({ includeNews: true });
+    if (!isAdminBearer(req.get("authorization"))) {
+      return res.status(403).json({
+        error: "forbidden",
+        message: "Se requiere sesión de administrador (Bearer JWT con role admin).",
+      });
+    }
+    const raw =
+      (req.body && req.body.match_date) ||
+      (typeof req.query?.match_date === "string" && req.query.match_date) ||
+      "";
+    const matchDate = String(raw).trim();
+    if (matchDate && !/^\d{4}-\d{2}-\d{2}$/.test(matchDate)) {
+      return res.status(400).json({ error: "bad_request", message: "match_date debe ser YYYY-MM-DD" });
+    }
+    const result = await runFactoryCycleNow({
+      includeNews: true,
+      matchDate: matchDate || null,
+    });
     res.json(result);
   } catch (error) {
     next(error);

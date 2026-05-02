@@ -47,8 +47,13 @@ async function runFactoryCycleNow(options = {}) {
   try {
     const sports = getFactorySports();
     const enableSourceHealth = process.env.FACTORY_ENABLE_EXTERNAL_SCRAPERS === "true";
+    const matchDate =
+      typeof options.matchDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(options.matchDate.trim())
+        ? options.matchDate.trim()
+        : null;
+
     const [pipelineSettled, liveCount, news, sourceHealth] = await Promise.all([
-      Promise.allSettled(sports.map((sport) => runPredictionPipeline({ sport }))),
+      Promise.allSettled(sports.map((sport) => runPredictionPipeline({ sport, matchDate }))),
       monitorLiveMatches(),
       includeNews ? collectAndStoreSportsNews() : Promise.resolve([]),
       enableSourceHealth ? refreshSourcesHealth("football", 10) : Promise.resolve([]),

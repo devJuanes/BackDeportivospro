@@ -27,7 +27,7 @@ async function createNews(news) {
   const slug = toSlug(news.slug || news.title || "noticia");
   const excerpt = news.summary || news.excerpt || "Actualización deportiva.";
   const content = news.content || news.summary || excerpt;
-  const { data, error } = await db.from(NEWS_TABLE).insert({
+  const row = {
     slug,
     title: news.title,
     excerpt,
@@ -39,7 +39,12 @@ async function createNews(news) {
     featured: news.featured === true,
     seo_title: news.seo_title || null,
     seo_description: news.seo_description || null,
-  });
+  };
+  if (news.matupicks_pick_id) row.matupicks_pick_id = news.matupicks_pick_id;
+  if (news.matupicks_pick_tier) row.matupicks_pick_tier = news.matupicks_pick_tier;
+  if (news.matupicks_blog_kind) row.matupicks_blog_kind = news.matupicks_blog_kind;
+  if (news.matupicks_youtube_url) row.matupicks_youtube_url = news.matupicks_youtube_url;
+  const { data, error } = await db.from(NEWS_TABLE).insert(row);
   if (error) {
     throw new Error(error.message || "Error creando noticia");
   }
@@ -66,9 +71,41 @@ async function createNewsIfNew(news) {
   return createNews(news);
 }
 
+async function listMatupicksBlogPosts(limit = 30) {
+  const lim = Math.min(Math.max(Number(limit) || 30, 1), 100);
+  const { data, error } = await db
+    .from(NEWS_TABLE)
+    .select("*")
+    .or("matupicks_blog_kind.eq.previa,matupicks_blog_kind.eq.recap")
+    .order("published_at", { ascending: false })
+    .limit(lim);
+  if (error) {
+    throw new Error(error.message || "Error listando blog MatuPicks");
+  }
+  return data || [];
+}
+
+async function hasMatupicksBlogForPick(pickId, kind) {
+  const clean = String(pickId || "").trim();
+  const k = String(kind || "").trim();
+  if (!clean || !k) return false;
+  const { data, error } = await db
+    .from(NEWS_TABLE)
+    .select("id")
+    .eq("matupicks_pick_id", clean)
+    .eq("matupicks_blog_kind", k)
+    .limit(1);
+  if (error) {
+    return false;
+  }
+  return Boolean(data && data.length > 0);
+}
+
 module.exports = {
   getNews,
   createNews,
   getNewsBySlug,
   createNewsIfNew,
+  listMatupicksBlogPosts,
+  hasMatupicksBlogForPick,
 };

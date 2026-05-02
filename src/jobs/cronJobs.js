@@ -4,6 +4,8 @@ const { monitorLiveMatches } = require("./liveMonitor");
 const { collectAndStoreSportsNews } = require("../services/newsService");
 const { runFactoryCycleNow } = require("../services/factoryService");
 const { expireStaleVipSubscriptions } = require("../services/vipSubscriptionService");
+const { generatePreviaBlogsForDate, generateRecapBlogsOnce, todayIsoDate } = require("../services/blogGenerationService");
+const { isAiEnabled } = require("../services/aiForecastService");
 
 function startCronJobs() {
   if (process.env.ENABLE_CRON !== "true") {
@@ -44,6 +46,28 @@ function startCronJobs() {
       await expireStaleVipSubscriptions();
     } catch (error) {
       logger.warn(`[CRON] expire VIP falló: ${error.message}`);
+    }
+  });
+
+  // Blog IA: previas del día (requiere FACTORY_AI_ENABLED + FACTORY_AI_API_KEY).
+  cron.schedule("15 8,14,20 * * *", async () => {
+    try {
+      if (!isAiEnabled()) return;
+      const r = await generatePreviaBlogsForDate(todayIsoDate(), 4);
+      if (r.created > 0) logger.info(`[CRON] Blog previas: created=${r.created}`);
+    } catch (error) {
+      logger.warn(`[CRON] Blog previas falló: ${error.message}`);
+    }
+  });
+
+  // Blog IA: crónicas post-partido (picks cerrados sin recap).
+  cron.schedule("25 * * * *", async () => {
+    try {
+      if (!isAiEnabled()) return;
+      const r = await generateRecapBlogsOnce(2);
+      if (r.created > 0) logger.info(`[CRON] Blog recaps: created=${r.created}`);
+    } catch (error) {
+      logger.warn(`[CRON] Blog recaps falló: ${error.message}`);
     }
   });
 

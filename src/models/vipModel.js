@@ -1,5 +1,6 @@
 const { db } = require("../config/database");
 const { formatDateInTimezone } = require("../utils/helpers");
+const { normalizeMatchHour } = require("../utils/matchHour");
 const VIP_TABLE = process.env.FACTORY_VIP_TABLE || "vip_picks";
 
 function todayIsoDate() {
@@ -39,6 +40,8 @@ async function getVipPredictions(limit = 100, filters = {}) {
 }
 
 async function createVipPrediction(payload) {
+  const matchHour = normalizeMatchHour(payload.hours || payload.match_hour);
+  const sport = String(payload.sport || "football").trim().toLowerCase() || "football";
   const { data, error } = await db.from(VIP_TABLE).insert({
     league: payload.league,
     team_a: payload.homeTeam?.name || payload.home_team_name,
@@ -49,6 +52,8 @@ async function createVipPrediction(payload) {
     probability: payload.probability || null,
     analysis: payload.analysis || payload.rationale_short || payload.rationale || null,
     match_date: payload.date || payload.match_date,
+    match_hour: matchHour,
+    sport,
     status: "pending",
     moderation_status: "pending",
     moderation_note: payload.moderation_note || null,

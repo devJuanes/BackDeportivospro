@@ -33,6 +33,15 @@ async function runFactoryMigrations() {
     "ALTER TABLE pf_users ADD COLUMN IF NOT EXISTS vip_expires_at TIMESTAMPTZ;",
     "CREATE TABLE IF NOT EXISTS wompi_vip_redemptions (reference TEXT PRIMARY KEY, wompi_transaction_id TEXT, user_id UUID NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());",
     "CREATE INDEX IF NOT EXISTS idx_wompi_vip_redemptions_user_id ON wompi_vip_redemptions(user_id);",
+    "ALTER TABLE IF EXISTS free_picks ADD COLUMN IF NOT EXISTS match_hour TEXT NOT NULL DEFAULT '00:00';",
+    "ALTER TABLE IF EXISTS vip_picks ADD COLUMN IF NOT EXISTS match_hour TEXT NOT NULL DEFAULT '00:00';",
+    "ALTER TABLE IF EXISTS free_picks ADD COLUMN IF NOT EXISTS sport TEXT NOT NULL DEFAULT 'football';",
+    "ALTER TABLE IF EXISTS vip_picks ADD COLUMN IF NOT EXISTS sport TEXT NOT NULL DEFAULT 'football';",
+    "ALTER TABLE IF EXISTS news_articles ADD COLUMN IF NOT EXISTS matupicks_pick_id UUID;",
+    "ALTER TABLE IF EXISTS news_articles ADD COLUMN IF NOT EXISTS matupicks_pick_tier TEXT;",
+    "ALTER TABLE IF EXISTS news_articles ADD COLUMN IF NOT EXISTS matupicks_blog_kind TEXT;",
+    "ALTER TABLE IF EXISTS news_articles ADD COLUMN IF NOT EXISTS matupicks_youtube_url TEXT;",
+    "CREATE INDEX IF NOT EXISTS idx_news_matupicks_pick_kind ON news_articles(matupicks_pick_id, matupicks_blog_kind);",
   ];
 
   for (const sql of statements) {

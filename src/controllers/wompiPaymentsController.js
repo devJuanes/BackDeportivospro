@@ -1,11 +1,19 @@
 const crypto = require("crypto");
 const logger = require("../utils/logger");
-const { buildWebCheckoutUrl, parsePfVipUserIdFromReference } = require("../services/wompiService");
+const {
+  buildWebCheckoutUrl,
+  parsePfVipUserIdFromReference,
+  parsePfVipMetaFromReference,
+} = require("../services/wompiService");
+const { listWompiRedemptionsByUserId } = require("../models/wompiVipRedemptionModel");
+const { getUserIdFromBearer } = require("../utils/jwtAdmin");
 const { fetchWompiTransaction } = require("../services/wompiRestService");
 const { grantVipAfterApprovedPayment } = require("../services/vipSubscriptionService");
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+const PLAN_LABEL_BY_TAG = { wk: "Semanal", mo: "Mensual", yr: "Anual" };
 
 /** 20.000 COP/mes en centavos (100 centavos = 1 COP en API Wompi). */
 const DEFAULT_MONTHLY_CENTS = 2_000_000;
@@ -362,6 +370,36 @@ async function wompiWebhook(req, res) {
   }
 }
 
+/**
+ * GET /api/payments/wompi/my-redemptions
+ * Historial de cobros VIP Wompi del usuario del Bearer (MatuDB JWT).
+ */
+async function getMyWompiRedemptions(req, res, next) {
+  try {
+    const userId = getUserIdFromBearer(req.get("authorization"));
+    if (!userId) {
+      return res.status(401).json({ error: "No autorizado" });
+    }
+    const rows = await listWompiRedemptionsByUserId(userId, 30);
+    const redemptions = rows.map((r) => {
+      const ref = r.reference != null ? String(r.reference) : "";
+      const meta = parsePfVipMetaFromReference(ref);
+      const planTag = meta?.planTag && PLAN_LABEL_BY_TAG[meta.planTag] ? meta.planTag : "mo";
+      return {
+        reference: ref,
+        wompiTransactionId: r.wompi_transaction_id != null ? String(r.wompi_transaction_id) : null,
+        createdAt: r.created_at != null ? String(r.created_at) : "",
+        planTag,
+        planLabel: PLAN_LABEL_BY_TAG[planTag] || PLAN_LABEL_BY_TAG.mo,
+      };
+    });
+    return res.json({ redemptions });
+  } catch (e) {
+    logger.error("[wompi] my-redemptions", e);
+    return next(e);
+  }
+}
+
 function getWompiStatus(req, res) {
   warnWompiEnvMismatchOnce();
   const pub = process.env.WOMPI_PUBLIC_KEY || "";
@@ -407,4 +445,5 @@ module.exports = {
   confirmWompiReturn,
   wompiWebhook,
   getWompiStatus,
+  getMyWompiRedemptions,
 };

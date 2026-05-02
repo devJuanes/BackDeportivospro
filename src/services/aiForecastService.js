@@ -113,20 +113,24 @@ function parseModelJson(content) {
   }
 }
 
-async function callChatModel(prompt) {
+async function callChatModel(prompt, systemOverride) {
   const url = process.env.FACTORY_AI_BASE_URL || "https://api.deepseek.com";
   const apiKey = process.env.FACTORY_AI_API_KEY;
   const model = process.env.FACTORY_AI_MODEL || "deepseek-chat";
   if (!apiKey) {
     throw new Error("FACTORY_AI_API_KEY no configurada");
   }
+  const system =
+    typeof systemOverride === "string" && systemOverride.trim()
+      ? systemOverride.trim()
+      : "Responde solo JSON válido.";
   const { data } = await axios.post(
     `${url}/v1/chat/completions`,
     {
       model,
       temperature: 0.2,
       messages: [
-        { role: "system", content: "Responde solo JSON válido." },
+        { role: "system", content: system },
         { role: "user", content: prompt },
       ],
     },
@@ -250,6 +254,7 @@ async function generateAiPredictionsFromFixtures(fixtures = []) {
 }
 
 module.exports = {
+  callChatModel,
   generateAiPredictionsFromFixtures,
   generateLiveInsightFromMatch,
   isAiEnabled,
