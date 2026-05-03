@@ -1,6 +1,7 @@
 const { isAdminHttpRequest } = require("../utils/adminHttpAuth");
 const {
   generatePreviaBlogsForDate,
+  generatePreviaBlogForPick,
   generateRecapBlogsOnce,
   todayIsoDate,
 } = require("../services/blogGenerationService");
@@ -56,7 +57,29 @@ async function postGenerateRecaps(req, res, next) {
   }
 }
 
+async function postGeneratePreviaForPick(req, res, next) {
+  try {
+    if (!(await isAdminHttpRequest(req)) && !blogCronAuthorized(req)) {
+      return res.status(403).json({
+        error: "forbidden",
+        message: "JWT admin o x-blog-cron-secret requerido.",
+      });
+    }
+    const pickId = String(req.body?.pick_id ?? req.query?.pick_id ?? "").trim();
+    const tierRaw = String(req.body?.tier ?? req.body?.pick_tier ?? req.query?.tier ?? "free").toLowerCase();
+    const tier = tierRaw === "vip" ? "vip" : "free";
+    if (!pickId) {
+      return res.status(400).json({ error: "bad_request", message: "pick_id requerido" });
+    }
+    const result = await generatePreviaBlogForPick(pickId, tier);
+    res.json({ ok: true, ...result });
+  } catch (e) {
+    next(e);
+  }
+}
+
 module.exports = {
   postGeneratePrevias,
+  postGeneratePreviaForPick,
   postGenerateRecaps,
 };

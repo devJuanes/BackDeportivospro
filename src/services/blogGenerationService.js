@@ -27,20 +27,21 @@ function siteBase() {
   return u.startsWith("http") ? u : `https://${u.replace(/^\/\//, "")}`;
 }
 
-function heroImageUrl(seed) {
-  const pool = [
-    "1574629810360-7efbbe195018",
-    "1431324155629-1a6a1c2c33bb",
-    "1522778119023-f5bc543d3afb",
-    "1556056502-d37465d75908",
-  ];
-  let h = 0;
-  const s = String(seed || "x");
-  for (let i = 0; i < s.length; i += 1) {
-    h = (h * 31 + s.charCodeAt(i)) >>> 0;
-  }
-  const id = pool[h % pool.length];
-  return `https://images.unsplash.com/photo-${id}?auto=format&fit=crop&w=1200&q=80`;
+/** Imagen por defecto del propio sitio (evita Unsplash roto / repetido en cards). Staff puede sustituir URL en Fábrica. */
+function defaultArticleHeroUrl() {
+  return `${siteBase()}/og-banner.png`;
+}
+
+function pickHeroImageUrl(art) {
+  const u = String(art?.hero_image_url || "").trim();
+  if (u.startsWith("https://") || u.startsWith("http://")) return u;
+  return defaultArticleHeroUrl();
+}
+
+function readTimeFromHtml(html, fallback = 10) {
+  const len = String(html || "").length;
+  const est = Math.round(len / 1100);
+  return Math.min(18, Math.max(8, Number.isFinite(est) ? est : fallback));
 }
 
 async function listPicksForDate(matchDate) {
@@ -96,17 +97,24 @@ async function listEndedPicksCandidates(limit = 24) {
 }
 
 const BLOG_PREVIA_SYSTEM = [
-  "Eres director editorial y SEO senior de MatuPicks (pronósticos deportivos).",
-  "Respondes SOLO JSON válido, sin markdown.",
-  "Artículos informativos de previa; sin prometer dinero ni resultados seguros.",
-  "Incluye lectura táctica y contexto de liga; tono español latinoamericano.",
+  "Eres director editorial y SEO senior de MatuPicks (pronósticos deportivos, Latinoamérica y Europa).",
+  "Respondes SOLO JSON válido, sin markdown envolvente.",
+  "Artículos largos de previa: mínimo ~900 palabras en html_content (varios <h2>, <h3>, <p>, <ul> con datos).",
+  "Incluye secciones claras: (1) contexto de liga y jornada, (2) forma reciente ilustrativa local vs visita, (3) enfrentamientos / estilo de juego, (4) ausencias o dudas si aplican al contexto, (5) lectura táctica y ritmo esperado, (6) mercados relacionados con el pronóstico del pick (sin prometer ganancias), (7) datos a vigilar con lista.",
+  "Puedes usar números y rachas como EJEMPLO ilustrativo; añade una frase de descargo: son referencias editoriales, no certificación estadística externa.",
+  "Debe existir un CTA visible: botón o enlace destacado al link_pronostico del ítem (HTML <a> con href absoluto).",
+  "hero_image_url: URL https pública de imagen horizontal (estadio, gráfico genérico). Si no tienes una fiable, usa null.",
+  "Tono español latinoamericano; sin lenguaje de apuesta problemática ni promesas de resultado.",
 ].join(" ");
 
 const BLOG_RECAP_SYSTEM = [
   "Eres editor deportivo senior de MatuPicks.",
-  "Respondes SOLO JSON válido, sin markdown.",
-  "Artículos post-partido: resultado, lectura del encuentro, qué funcionó o no.",
-  "Puedes sugerir un bloque opcional para insertar video de YouTube con un <div class=\"yt-embed\"> y data-youtube-url=\"URL\" (placeholder si no hay URL real).",
+  "Respondes SOLO JSON válido, sin markdown envolvente.",
+  "Crónicas largas post-partido: mínimo ~700 palabras en html_content con <h2>, <p>, listas donde encaje.",
+  "Estructura: resultado y lectura del ritmo, claves tácticas que marcaron, acierto o error del pronóstico enlazado, qué esperar a futuro.",
+  "Puedes sugerir un bloque opcional para video: <div class=\"yt-embed\" data-youtube-url=\"URL\"> si hay URL; si no, omite.",
+  "hero_image_url: URL https de imagen; si no hay una fiable, null.",
+  "Incluye CTA final con enlace absoluto a la ficha del pronóstico.",
 ].join(" ");
 
 function buildPreviaUserPrompt(rows, baseUrl) {
@@ -126,9 +134,9 @@ function buildPreviaUserPrompt(rows, baseUrl) {
     "Genera una entrada de blog por cada ítem (previa antes del partido).",
     JSON.stringify({ partidos: compact }, null, 0),
     "",
-    "Formato exacto:",
-    '{ "articles": [ { "pick_id": "uuid", "pick_tier": "free"|"vip", "title": "...", "excerpt": "máx 220 caracteres", "html_content": "HTML sin script. Incluye <h2>, varios <p>, opcional <ul>. Debe incluir un CTA con enlace absoluto al pronóstico (usa link_pronostico del ítem).", "seo_title": "máx 60 caracteres", "seo_description": "máx 155 caracteres", "read_time": 4 } ] }',
-    "Debes devolver un artículo por cada pick_id listado (mismo número de artículos que ítems).",
+    "Formato exacto (respeta las claves):",
+    '{ "articles": [ { "pick_id": "uuid", "pick_tier": "free"|"vip", "title": "...", "excerpt": "220-380 caracteres; resumen rico, no una sola frase", "html_content": "HTML sin <script>. Largo editorial (~900+ palabras), secciones con <h2>/<h3>, listas <ul>, negritas <strong> en datos clave. Incluye CTA al link_pronostico.", "seo_title": "máx 60 caracteres", "seo_description": "130-160 caracteres", "read_time": 10, "hero_image_url": "https://... o null" } ] }',
+    "Devuelve exactamente un artículo por cada pick_id listado (mismo orden y cantidad).",
   ].join("\n");
 }
 
@@ -148,7 +156,7 @@ function buildRecapUserPrompt(rows, baseUrl) {
     JSON.stringify({ partidos: compact }, null, 0),
     "",
     "Formato exacto:",
-    '{ "articles": [ { "pick_id": "uuid", "pick_tier": "free"|"vip", "title": "...", "excerpt": "máx 220 caracteres", "html_content": "HTML sin script. Resume el partido, el resultado y la tesis del pronóstico. Incluye sección opcional con div data-youtube-url para insertar resumen en video. CTA final: <a href=LINK>Ver ficha del pronóstico</a>.", "seo_title": "...", "seo_description": "...", "read_time": 5, "youtube_url": null } ] }',
+    '{ "articles": [ { "pick_id": "uuid", "pick_tier": "free"|"vip", "title": "...", "excerpt": "220-360 caracteres", "html_content": "HTML sin <script>. ~700+ palabras, <h2>/<h3>, análisis del resultado y del pick enlazado. CTA con href absoluto a link_pronostico.", "seo_title": "...", "seo_description": "...", "read_time": 9, "youtube_url": null, "hero_image_url": "https://... o null" } ] }',
   ].join("\n");
 }
 
@@ -200,14 +208,22 @@ async function generatePreviaBlogsForDate(matchDate, maxArticles = 4) {
     const slug = `mp-previa-${toSlug(`${matchDate}-${row.team_a}-vs-${row.team_b}`)}`.slice(0, 120);
     try {
       // eslint-disable-next-line no-await-in-loop
+      const htmlBody = String(art.html_content || "").trim();
+      const excerptFallback = String(art.excerpt || art.seo_description || "").trim();
+      const content =
+        htmlBody.length >= 400
+          ? htmlBody
+          : `${htmlBody}<p>${excerptFallback}</p><p><em>Contenido ampliado pendiente: usá la Fábrica → Editor de notas para pegar HTML o subir más texto.</em></p>`;
       await createNews({
         slug,
         title: String(art.title || `Previa: ${row.team_a} vs ${row.team_b}`).slice(0, 200),
-        summary: String(art.excerpt || art.seo_description || "").slice(0, 400),
-        content: String(art.html_content || `<p>${String(art.excerpt || "")}</p>`),
+        summary: excerptFallback.slice(0, 400) || excerptFallback,
+        content,
         category: "pronosticos",
-        image: heroImageUrl(pickId),
-        read_time: Number.isFinite(Number(art.read_time)) ? Number(art.read_time) : 5,
+        image: pickHeroImageUrl(art),
+        read_time: Number.isFinite(Number(art.read_time))
+          ? Math.min(20, Math.max(8, Number(art.read_time)))
+          : readTimeFromHtml(content),
         seo_title: art.seo_title ? String(art.seo_title).slice(0, 120) : null,
         seo_description: art.seo_description ? String(art.seo_description).slice(0, 200) : null,
         matupicks_pick_id: pickId,
@@ -222,6 +238,91 @@ async function generatePreviaBlogsForDate(matchDate, maxArticles = 4) {
   }
 
   return { skipped: false, created, matchDate, candidates: candidates.length, table: NEWS_TABLE };
+}
+
+async function fetchPickRowById(pickId, tier) {
+  const table = tier === "vip" ? "vip_picks" : "free_picks";
+  const { data, error } = await db.from(table).select("*").eq("id", pickId).limit(1);
+  if (error) throw new Error(error.message || table);
+  const rows = Array.isArray(data) ? data : data ? [data] : [];
+  return rows[0] || null;
+}
+
+/**
+ * Genera una sola previa de blog para un pick concreto (admin / cron).
+ * @param {string} pickId uuid del pick en free_picks o vip_picks
+ * @param {"free"|"vip"} tier
+ */
+async function generatePreviaBlogForPick(pickId, tier) {
+  if (!isAiEnabled()) {
+    return { skipped: true, reason: "ai_disabled", created: 0 };
+  }
+  const cleanTier = tier === "vip" ? "vip" : "free";
+  const cleanId = String(pickId || "").trim();
+  if (!cleanId) {
+    return { skipped: false, created: 0, message: "missing_pick_id" };
+  }
+  const row = await fetchPickRowById(cleanId, cleanTier);
+  if (!row) {
+    return { skipped: false, created: 0, message: "pick_not_found" };
+  }
+  if (await hasMatupicksBlogForPick(cleanId, "previa")) {
+    return { skipped: false, created: 0, message: "previa_already_exists" };
+  }
+
+  const base = siteBase();
+  const candidates = [{ ...row, _tier: cleanTier }];
+  const userPrompt = buildPreviaUserPrompt(candidates, base);
+  const blogTimeoutMs = Number.parseInt(process.env.BLOG_AI_TIMEOUT_MS || "180000", 10);
+  const raw = await callChatModel(userPrompt, BLOG_PREVIA_SYSTEM, { timeoutMs: blogTimeoutMs });
+  const articles = Array.isArray(raw?.articles) ? raw.articles : [];
+  let created = 0;
+  const matchDateForSlug = String(row.match_date || todayIsoDate()).slice(0, 10);
+
+  for (const art of articles) {
+    const pickIdArt = String(art.pick_id || "").trim();
+    const tierArt = art.pick_tier === "vip" ? "vip" : "free";
+    if (pickIdArt !== cleanId || tierArt !== cleanTier) continue;
+    if (await hasMatupicksBlogForPick(cleanId, "previa")) break;
+    const slug = `mp-previa-${toSlug(`${matchDateForSlug}-${row.team_a}-vs-${row.team_b}`)}`.slice(0, 120);
+    try {
+      const htmlBody = String(art.html_content || "").trim();
+      const excerptFallback = String(art.excerpt || art.seo_description || "").trim();
+      const content =
+        htmlBody.length >= 400
+          ? htmlBody
+          : `${htmlBody}<p>${excerptFallback}</p><p><em>Contenido ampliado pendiente: usá el Editor editorial para pegar HTML o subir más texto.</em></p>`;
+      await createNews({
+        slug,
+        title: String(art.title || `Previa: ${row.team_a} vs ${row.team_b}`).slice(0, 200),
+        summary: excerptFallback.slice(0, 400) || excerptFallback,
+        content,
+        category: "pronosticos",
+        image: pickHeroImageUrl(art),
+        read_time: Number.isFinite(Number(art.read_time))
+          ? Math.min(20, Math.max(8, Number(art.read_time)))
+          : readTimeFromHtml(content),
+        seo_title: art.seo_title ? String(art.seo_title).slice(0, 120) : null,
+        seo_description: art.seo_description ? String(art.seo_description).slice(0, 200) : null,
+        matupicks_pick_id: cleanId,
+        matupicks_pick_tier: cleanTier,
+        matupicks_blog_kind: "previa",
+        matupicks_youtube_url: null,
+      });
+      created = 1;
+    } catch (e) {
+      logger.warn(`[blog] previa pick ${cleanId}: ${e.message}`);
+    }
+  }
+
+  return {
+    skipped: false,
+    created,
+    pick_id: cleanId,
+    tier: cleanTier,
+    message: created ? "ok" : "no_article_in_response",
+    table: NEWS_TABLE,
+  };
 }
 
 /** Crónicas post-partido para picks ya cerrados (won/lost) sin recap. */
@@ -260,14 +361,22 @@ async function generateRecapBlogsOnce(maxPicks = 3) {
     const yt = art.youtube_url ? String(art.youtube_url).trim() : "";
     try {
       // eslint-disable-next-line no-await-in-loop
+      const htmlRec = String(art.html_content || "").trim();
+      const exRec = String(art.excerpt || art.seo_description || "").trim();
+      const contentRec =
+        htmlRec.length >= 350
+          ? htmlRec
+          : `${htmlRec}<p>${exRec}</p><p><em>Ampliá la crónica desde Fábrica → Editor de notas si querés más detalle.</em></p>`;
       await createNews({
         slug,
         title: String(art.title || `Crónica: ${row.team_a} vs ${row.team_b}`).slice(0, 200),
-        summary: String(art.excerpt || art.seo_description || "").slice(0, 400),
-        content: String(art.html_content || `<p>${String(art.excerpt || "")}</p>`),
+        summary: exRec.slice(0, 400) || exRec,
+        content: contentRec,
         category: "analisis",
-        image: heroImageUrl(`${pickId}-recap`),
-        read_time: Number.isFinite(Number(art.read_time)) ? Number(art.read_time) : 6,
+        image: pickHeroImageUrl(art),
+        read_time: Number.isFinite(Number(art.read_time))
+          ? Math.min(20, Math.max(8, Number(art.read_time)))
+          : readTimeFromHtml(contentRec, 9),
         seo_title: art.seo_title ? String(art.seo_title).slice(0, 120) : null,
         seo_description: art.seo_description ? String(art.seo_description).slice(0, 200) : null,
         matupicks_pick_id: pickId,
@@ -286,6 +395,7 @@ async function generateRecapBlogsOnce(maxPicks = 3) {
 
 module.exports = {
   generatePreviaBlogsForDate,
+  generatePreviaBlogForPick,
   generateRecapBlogsOnce,
   todayIsoDate,
   siteBase,
