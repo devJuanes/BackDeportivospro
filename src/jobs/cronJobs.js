@@ -6,6 +6,7 @@ const { runFactoryCycleNow } = require("../services/factoryService");
 const { expireStaleVipSubscriptions } = require("../services/vipSubscriptionService");
 const { generatePreviaBlogsForDate, generateRecapBlogsOnce, todayIsoDate } = require("../services/blogGenerationService");
 const { isAiEnabled } = require("../services/aiForecastService");
+const { settlePendingPickResultsOnce } = require("../services/pickSettlementService");
 
 function scheduleSafe(expression, fallback, label, task) {
   const expr = String(expression || "").trim() || fallback;
@@ -55,6 +56,15 @@ function startCronJobs() {
       await collectAndStoreSportsNews();
     } catch (error) {
       logger.warn(`[CRON] Noticias falló: ${error.message}`);
+    }
+  });
+
+  const settleCron = process.env.CRON_SETTLE_EXPRESSION?.trim() || "*/12 * * * *";
+  scheduleSafe(settleCron, "*/12 * * * *", "pick_settlement", async () => {
+    try {
+      await settlePendingPickResultsOnce();
+    } catch (error) {
+      logger.warn(`[CRON] Liquidación picks falló: ${error.message}`);
     }
   });
 

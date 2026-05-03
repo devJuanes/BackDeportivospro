@@ -227,6 +227,26 @@ async function getTodayFootballFixturesLatam(dateIso = null) {
     logger.warn(`TheSportsDB merge LATAM: ${error.message}`);
   }
 
+  try {
+    const { isConfigured, getSoccersFootballFixturesForDate } = require("./soccersApiService");
+    if (isConfigured()) {
+      const soc = await getSoccersFootballFixturesForDate(effectiveDateIso);
+      let added = 0;
+      for (const row of soc) {
+        const k = `${String(row.homeTeam).toLowerCase()}|${String(row.awayTeam).toLowerCase()}`;
+        if (seenPair.has(k)) continue;
+        seenPair.add(k);
+        merged.push(row);
+        added += 1;
+      }
+      if (added > 0) {
+        logger.info(`LATAM: +${added} fixtures desde SoccersAPI (${effectiveDateIso})`);
+      }
+    }
+  } catch (error) {
+    logger.warn(`SoccersAPI merge LATAM: ${error.message}`);
+  }
+
   if (merged.length > 0) {
     try {
       await upsertFixtures(
