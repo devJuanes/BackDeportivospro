@@ -26,6 +26,9 @@ const EURO_MARKERS = [
 
 const LATAM_MARKERS = [
   "colombia",
+  /** Liga BetPlay / Dimayor en ESPN suele venir como "Primera A" sin país */
+  "primera a",
+  "primera b",
   "betplay",
   "dimayor",
   "primera b colombia",

@@ -6,7 +6,7 @@ const {
 } = require("../services/predictionEngine");
 const { createFreePrediction, getFreePredictions } = require("../models/predictionModel");
 const { createVipPrediction, getVipPredictions } = require("../models/vipModel");
-const { getTodayFixturesBySport } = require("../services/sportsService");
+const { getTodayFixturesBySport, getTodayFootballFixturesLatam } = require("../services/sportsService");
 const { prioritizeFixtures, diversifyFixtures } = require("../services/fixturePriorityService");
 const { getPredictionSourcePolicy, toHost } = require("../services/sourceService");
 const { generateAiPredictionsFromFixtures } = require("../services/aiForecastService");
@@ -44,15 +44,13 @@ async function runPredictionPipeline(options = {}) {
   const scraperEnabled = process.env.FACTORY_ENABLE_EXTERNAL_SCRAPERS === "true";
   let fixtures = [];
   try {
-    fixtures = await getTodayFixturesBySport(sport, matchDateIso || undefined);
+    if (sport === "football" && latamOnly) {
+      fixtures = await getTodayFootballFixturesLatam(matchDateIso || undefined);
+    } else {
+      fixtures = await getTodayFixturesBySport(sport, matchDateIso || undefined);
+    }
   } catch (error) {
     logger.warn(`No se pudieron leer fixtures ${sport}: ${error.message}`);
-  }
-  if (sport === "football" && latamOnly) {
-    const { filterFootballFixturesLatam } = require("../utils/latamFixtures");
-    const nBefore = fixtures.length;
-    fixtures = filterFootballFixturesLatam(fixtures);
-    logger.info(`LATAM: fixtures ${nBefore} → ${fixtures.length} (solo ligas/países LATAM)`);
   }
   const rotationPool = Number.parseInt(process.env.FACTORY_FIXTURE_ROTATION_POOL || "80", 10);
   const rotationWindowMin = Number.parseInt(process.env.FACTORY_FIXTURE_ROTATION_WINDOW_MIN || "15", 10);
@@ -133,9 +131,13 @@ async function runPredictionPipeline(options = {}) {
     free: batchFree,
     vip: batchVip,
   });
+  const aiMatchLimit =
+    sport === "football" && latamOnly
+      ? Number.parseInt(process.env.FACTORY_LATAM_AI_MATCH_LIMIT || "40", 10)
+      : undefined;
   const aiFromFixtures =
     sport === "football"
-      ? await generateAiPredictionsFromFixtures(aiInputFixtures)
+      ? await generateAiPredictionsFromFixtures(aiInputFixtures, { matchLimit: aiMatchLimit })
       : { free: [], vip: [] };
   const fromScrapers = splitFreeAndVipPredictions(scrapedForFree, sport, { free: batchFree, vip: batchVip });
   const vipFromReliableScrapers = buildTierPredictionsFromScraped(
