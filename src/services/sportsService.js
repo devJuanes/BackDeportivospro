@@ -33,11 +33,11 @@ function getSupportedSports() {
   return SUPPORTED_SPORTS;
 }
 
-/** Deportes que ejecuta la fábrica (predictions + live monitor). Respeta FACTORY_SPORTS; por defecto solo fútbol. */
+/** Deportes que ejecuta la fábrica (predictions + live monitor). Respeta FACTORY_SPORTS; si no hay env, fútbol + NBA + tenis + hockey. */
 function getFactorySports() {
   const raw = process.env.FACTORY_SPORTS;
   if (!raw) {
-    return ["football"];
+    return ["football", "basketball", "tennis", "hockey"];
   }
   const allowed = new Set(SUPPORTED_SPORTS);
   const parsed = raw
