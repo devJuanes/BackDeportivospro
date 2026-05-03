@@ -36,9 +36,11 @@ async function runNow(req, res, next) {
     if (matchDate && !/^\d{4}-\d{2}-\d{2}$/.test(matchDate)) {
       return res.status(400).json({ error: "bad_request", message: "match_date debe ser YYYY-MM-DD" });
     }
+    const latamOnly = req.body?.latam_only === true;
     const result = await runFactoryCycleNow({
       includeNews: true,
       matchDate: matchDate || null,
+      latamFootballOnly: latamOnly,
     });
     res.json(result);
   } catch (error) {

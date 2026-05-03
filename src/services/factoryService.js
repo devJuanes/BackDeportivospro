@@ -54,8 +54,14 @@ async function runFactoryCycleNow(options = {}) {
         ? options.matchDate.trim()
         : null;
 
+    const latamFootballOnly = options.latamFootballOnly === true;
+
+    const pipelineJobs = latamFootballOnly
+      ? [runPredictionPipeline({ sport: "football", matchDate, latamOnly: true })]
+      : sports.map((sport) => runPredictionPipeline({ sport, matchDate }));
+
     const [pipelineSettled, news, sourceHealth] = await Promise.all([
-      Promise.allSettled(sports.map((sport) => runPredictionPipeline({ sport, matchDate }))),
+      Promise.allSettled(pipelineJobs),
       includeNews ? collectAndStoreSportsNews() : Promise.resolve([]),
       enableSourceHealth ? refreshSourcesHealth("football", 10) : Promise.resolve([]),
     ]);
@@ -81,6 +87,7 @@ async function runFactoryCycleNow(options = {}) {
 
     factoryState.last_run_result = {
       pipeline,
+      ...(latamFootballOnly ? { latam_football_only: true } : {}),
       live_alerts_created: liveCount,
       news_stored: news.length,
       source_health_updated: sourceHealth.length,

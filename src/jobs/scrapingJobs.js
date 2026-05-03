@@ -31,6 +31,7 @@ function fixtureKeyForTier(fixture, sport) {
 
 async function runPredictionPipeline(options = {}) {
   const sport = options.sport || "football";
+  const latamOnly = options.latamOnly === true;
   const timezone = process.env.FACTORY_TIMEZONE || "America/Bogota";
   const matchDateIso =
     typeof options.matchDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(options.matchDate.trim())
@@ -38,7 +39,7 @@ async function runPredictionPipeline(options = {}) {
       : null;
   const calendarDayIso = matchDateIso || formatDateInTimezone(new Date(), timezone);
   logger.info(
-    `Iniciando pipeline de scraping + predicción (${sport}, día=${calendarDayIso})...`
+    `Iniciando pipeline de scraping + predicción (${sport}, día=${calendarDayIso}${latamOnly ? ", modo=LATAM" : ""})...`
   );
   const scraperEnabled = process.env.FACTORY_ENABLE_EXTERNAL_SCRAPERS === "true";
   let fixtures = [];
@@ -46,6 +47,12 @@ async function runPredictionPipeline(options = {}) {
     fixtures = await getTodayFixturesBySport(sport, matchDateIso || undefined);
   } catch (error) {
     logger.warn(`No se pudieron leer fixtures ${sport}: ${error.message}`);
+  }
+  if (sport === "football" && latamOnly) {
+    const { filterFootballFixturesLatam } = require("../utils/latamFixtures");
+    const nBefore = fixtures.length;
+    fixtures = filterFootballFixturesLatam(fixtures);
+    logger.info(`LATAM: fixtures ${nBefore} → ${fixtures.length} (solo ligas/países LATAM)`);
   }
   const rotationPool = Number.parseInt(process.env.FACTORY_FIXTURE_ROTATION_POOL || "80", 10);
   const rotationWindowMin = Number.parseInt(process.env.FACTORY_FIXTURE_ROTATION_WINDOW_MIN || "15", 10);
@@ -59,8 +66,14 @@ async function runPredictionPipeline(options = {}) {
       ? diversifyFixtures(fixturesByPriority, rotationPool, rotationSeed)
       : fixtures;
 
-  const batchFree = Number.parseInt(process.env.FACTORY_BATCH_FREE || "60", 10);
-  const batchVip = Number.parseInt(process.env.FACTORY_BATCH_VIP || "60", 10);
+  const batchFree = Number.parseInt(
+    latamOnly ? process.env.FACTORY_LATAM_BATCH_FREE || "45" : process.env.FACTORY_BATCH_FREE || "60",
+    10
+  );
+  const batchVip = Number.parseInt(
+    latamOnly ? process.env.FACTORY_LATAM_BATCH_VIP || "45" : process.env.FACTORY_BATCH_VIP || "60",
+    10
+  );
 
   const scraped = sport === "football" && scraperEnabled ? await runAllPredictionScrapers() : [];
   if (sport === "football" && !scraperEnabled) {
@@ -184,6 +197,7 @@ async function runPredictionPipeline(options = {}) {
     free: insertedFree,
     vip: insertedVip,
     sport,
+    latam_only: latamOnly,
     fixtures_total: fixtures.length,
     fixtures_uncovered_free: uncoveredForFree.length,
     fixtures_uncovered_vip: uncoveredForVip.length,
