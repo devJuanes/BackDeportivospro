@@ -1,5 +1,4 @@
-const { db } = require("../config/database");
-const { isAdminBearer, getUserIdFromBearer } = require("../utils/jwtAdmin");
+const { isAdminHttpRequest } = require("../utils/adminHttpAuth");
 const {
   generatePreviaBlogsForDate,
   generateRecapBlogsOnce,
@@ -13,23 +12,9 @@ function blogCronAuthorized(req) {
   return h === secret;
 }
 
-async function isAdminRequest(req) {
-  if (isAdminBearer(req.get("authorization"))) return true;
-  const userId = getUserIdFromBearer(req.get("authorization"));
-  if (!userId) return false;
-  const { data, error } = await db
-    .from("pf_users")
-    .select("is_admin")
-    .eq("id", userId)
-    .limit(1)
-    .maybeSingle();
-  if (error) return false;
-  return data?.is_admin === true;
-}
-
 async function postGeneratePrevias(req, res, next) {
   try {
-    if (!(await isAdminRequest(req)) && !blogCronAuthorized(req)) {
+    if (!(await isAdminHttpRequest(req)) && !blogCronAuthorized(req)) {
       return res.status(403).json({
         error: "forbidden",
         message: "JWT admin o x-blog-cron-secret requerido.",
@@ -54,7 +39,7 @@ async function postGeneratePrevias(req, res, next) {
 
 async function postGenerateRecaps(req, res, next) {
   try {
-    if (!(await isAdminRequest(req)) && !blogCronAuthorized(req)) {
+    if (!(await isAdminHttpRequest(req)) && !blogCronAuthorized(req)) {
       return res.status(403).json({
         error: "forbidden",
         message: "JWT admin o x-blog-cron-secret requerido.",

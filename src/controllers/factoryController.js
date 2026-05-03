@@ -5,7 +5,7 @@ const {
 } = require("../services/factoryService");
 const { listSources, syncDefaultSources } = require("../services/sourceService");
 const { isWhatsAppReady } = require("../config/whatsapp");
-const { isAdminBearer } = require("../utils/jwtAdmin");
+const { isAdminHttpRequest } = require("../utils/adminHttpAuth");
 
 async function getStatus(req, res, next) {
   try {
@@ -21,10 +21,11 @@ async function getStatus(req, res, next) {
 
 async function runNow(req, res, next) {
   try {
-    if (!isAdminBearer(req.get("authorization"))) {
+    if (!(await isAdminHttpRequest(req))) {
       return res.status(403).json({
         error: "forbidden",
-        message: "Se requiere sesión de administrador (Bearer JWT con role admin).",
+        message:
+          "Se requiere sesión de administrador (JWT con role admin o usuario con pf_users.is_admin).",
       });
     }
     const raw =

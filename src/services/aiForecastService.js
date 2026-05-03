@@ -117,7 +117,12 @@ function parseModelJson(content) {
   }
 }
 
-async function callChatModel(prompt, systemOverride) {
+/**
+ * @param {string} prompt
+ * @param {string} [systemOverride]
+ * @param {{ timeoutMs?: number }} [opts]  timeout por petición (p. ej. previas largas vía `BLOG_AI_TIMEOUT_MS`).
+ */
+async function callChatModel(prompt, systemOverride, opts = {}) {
   const url = process.env.FACTORY_AI_BASE_URL || "https://api.deepseek.com";
   const apiKey = process.env.FACTORY_AI_API_KEY;
   const model = process.env.FACTORY_AI_MODEL || "deepseek-chat";
@@ -128,6 +133,11 @@ async function callChatModel(prompt, systemOverride) {
     typeof systemOverride === "string" && systemOverride.trim()
       ? systemOverride.trim()
       : "Responde solo JSON válido.";
+  const defaultMs = Number.parseInt(process.env.FACTORY_AI_TIMEOUT_MS || "12000", 10);
+  const timeout =
+    typeof opts.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
+      ? Math.max(1000, opts.timeoutMs)
+      : defaultMs;
   const { data } = await axios.post(
     `${url}/v1/chat/completions`,
     {
@@ -139,7 +149,7 @@ async function callChatModel(prompt, systemOverride) {
       ],
     },
     {
-      timeout: Number.parseInt(process.env.FACTORY_AI_TIMEOUT_MS || "12000", 10),
+      timeout,
       headers: {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",

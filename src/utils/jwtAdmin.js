@@ -34,6 +34,20 @@ function roleFromPayload(payload) {
   return direct;
 }
 
+/** Email en JWT (MatuDB Auth suele incluir `email` junto a `sub`). */
+function getEmailFromBearer(authorizationHeader) {
+  const raw = String(authorizationHeader || "").trim();
+  const token = /^Bearer\s+/i.test(raw) ? raw.replace(/^Bearer\s+/i, "").trim() : "";
+  if (!token) return null;
+  const payload = decodeJwtPayload(token);
+  if (!payload) return null;
+  const exp = Number(payload.exp);
+  if (Number.isFinite(exp) && exp * 1000 < Date.now()) return null;
+  const mail = payload.email;
+  if (typeof mail !== "string" || !mail.includes("@")) return null;
+  return mail.trim().toLowerCase();
+}
+
 /** Usuario autenticado (MatuDB JWT): `id` o `sub`, exp no vencido. */
 function getUserIdFromBearer(authorizationHeader) {
   const raw = String(authorizationHeader || "").trim();
@@ -62,6 +76,7 @@ function isAdminBearer(authorizationHeader) {
 
 module.exports = {
   decodeJwtPayload,
+  getEmailFromBearer,
   getUserIdFromBearer,
   isAdminBearer,
 };

@@ -185,7 +185,8 @@ async function generatePreviaBlogsForDate(matchDate, maxArticles = 4) {
   }
 
   const userPrompt = buildPreviaUserPrompt(candidates, base);
-  const raw = await callChatModel(userPrompt, BLOG_PREVIA_SYSTEM);
+  const blogTimeoutMs = Number.parseInt(process.env.BLOG_AI_TIMEOUT_MS || "180000", 10);
+  const raw = await callChatModel(userPrompt, BLOG_PREVIA_SYSTEM, { timeoutMs: blogTimeoutMs });
   const articles = Array.isArray(raw?.articles) ? raw.articles : [];
   let created = 0;
 
@@ -243,7 +244,8 @@ async function generateRecapBlogsOnce(maxPicks = 3) {
   }
 
   const userPrompt = buildRecapUserPrompt(candidates, base);
-  const raw = await callChatModel(userPrompt, BLOG_RECAP_SYSTEM);
+  const blogTimeoutMs = Number.parseInt(process.env.BLOG_AI_TIMEOUT_MS || "180000", 10);
+  const raw = await callChatModel(userPrompt, BLOG_RECAP_SYSTEM, { timeoutMs: blogTimeoutMs });
   const articles = Array.isArray(raw?.articles) ? raw.articles : [];
   let created = 0;
 
