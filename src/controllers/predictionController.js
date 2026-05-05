@@ -8,6 +8,9 @@ const {
 const { db } = require("../config/database");
 const { sendMessage } = require("../config/whatsapp");
 
+/** Misma tabla que `predictionModel` — pronósticos gratis moderados. */
+const FREE_PICKS_TABLE = process.env.FACTORY_FREE_TABLE || "free_picks";
+
 function buildWhatsappMessage(prediction) {
   return `⚽ PRONOSTICO DEL DIA
 
@@ -156,6 +159,46 @@ function escapeXml(value) {
     .replace(/'/g, "&apos;");
 }
 
+/**
+ * Pronósticos indexables en `/pronosticos/:id/:slug` (solo gratis: free_picks + abet legacy).
+ * No incluye VIP (vip_picks / abetvip). Cada tabla usa solo columnas que existen en el esquema.
+ */
+async function fetchFreeStandardPickRowsForSeo(limit) {
+  const cap = Number.isFinite(limit) ? limit : 500;
+  const combined = [];
+
+  let modQ = db
+    .from(FREE_PICKS_TABLE)
+    .select("id,league,team_a,team_b,match_date,created_at,updated_at,moderation_status")
+    .eq("moderation_status", "active")
+    .order("created_at", { ascending: false })
+    .limit(cap);
+  let { data: freeRows, error: freeErr } = await modQ;
+  if (freeErr) {
+    const fb = await db
+      .from(FREE_PICKS_TABLE)
+      .select("id,league,team_a,team_b,match_date,created_at,updated_at")
+      .order("created_at", { ascending: false })
+      .limit(cap);
+    freeRows = fb.data;
+    freeErr = fb.error;
+  }
+  if (!freeErr && Array.isArray(freeRows)) {
+    combined.push(...freeRows);
+  }
+
+  const abetQ = await db
+    .from("abet")
+    .select("id,league,home_team_name,away_team_name,match_date,created_at,updated_at")
+    .order("created_at", { ascending: false })
+    .limit(cap);
+  if (!abetQ.error && Array.isArray(abetQ.data)) {
+    combined.push(...abetQ.data);
+  }
+
+  return combined;
+}
+
 async function buildSeoUrlEntries(limit, options = {}) {
     const includeStandard = options.includeStandard !== false;
     const includeLive = options.includeLive !== false;
@@ -196,27 +239,22 @@ async function buildSeoUrlEntries(limit, options = {}) {
     }
 
     if (includeStandard) {
-      const tables = ["abet", "abetvip", "free_picks", "vip_picks"];
-      for (const table of tables) {
-        const q = db
-          .from(table)
-          .select("id,league,home_team_name,away_team_name,team_a,team_b,match_date,created_at,updated_at")
-          .order("created_at", { ascending: false })
-          .limit(limit);
-        const { data, error } = await q;
-        if (error) continue;
-        for (const row of data || []) {
-          pushStandard(row);
-        }
+      const rows = await fetchFreeStandardPickRowsForSeo(limit);
+      for (const row of rows) {
+        pushStandard(row);
       }
     }
 
     if (includeLive) {
+      const liveLimit =
+        Number.isFinite(options.liveLimit) && options.liveLimit > 0
+          ? Math.min(options.liveLimit, 5000)
+          : Math.min(limit, 500);
       const liveQ = await db
         .from("abetlive")
         .select("id,league,home_team_name,away_team_name,created_at,updated_at")
         .order("created_at", { ascending: false })
-        .limit(limit);
+        .limit(liveLimit);
       if (!liveQ.error) {
         for (const row of liveQ.data || []) {
           pushLive(row);
@@ -277,7 +315,12 @@ async function getSeoSitemapXml(req, res, next) {
     const base = getAppBaseUrl();
     const rawLimit = Number.parseInt(String(req.query.limit || ""), 10);
     const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 50), 5000) : 2000;
-    const entries = await buildSeoUrlEntries(limit, { includeStandard: true, includeLive: true, includeBlog: true });
+    const entries = await buildSeoUrlEntries(limit, {
+      includeStandard: true,
+      includeLive: true,
+      includeBlog: true,
+      liveLimit: Math.min(limit, 500),
+    });
     const staticPaths = [
       "/",
       "/predictions/free",
@@ -328,8 +371,13 @@ async function getSeoSitemapLiveXml(req, res, next) {
   try {
     const base = getAppBaseUrl();
     const rawLimit = Number.parseInt(String(req.query.limit || ""), 10);
-    const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 50), 5000) : 3000;
-    const entries = await buildSeoUrlEntries(limit, { includeStandard: false, includeLive: true, includeBlog: false });
+    const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 50), 5000) : 400;
+    const entries = await buildSeoUrlEntries(limit, {
+      includeStandard: false,
+      includeLive: true,
+      includeBlog: false,
+      liveLimit: limit,
+    });
     const xml = toSitemapXml(base, entries);
     res.set("Content-Type", "application/xml; charset=utf-8");
     res.set("Cache-Control", "public, max-age=300");
