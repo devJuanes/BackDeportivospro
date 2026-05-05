@@ -3,6 +3,7 @@ const { estimateOddsFromConfidence } = require("./oddsService");
 const { clamp } = require("../utils/helpers");
 const logger = require("../utils/logger");
 const { mergeDedupeByKey, normalizePickLabel } = require("../utils/predictionDedupe");
+const { buildPredictionSeo } = require("../utils/predictionSeo");
 
 function isAiEnabled() {
   return process.env.FACTORY_AI_ENABLED === "true";
@@ -78,12 +79,16 @@ function toPredictionRecord(fixture, tier, aiData, index = 0) {
   const fallbackPick =
     tier === "vip" ? `Victoria ${homeName} — mercado 1X2` : "Más de 1.5 goles";
   const pick = sanitizePick(aiData?.pick || fallbackPick, tier, fixture);
-  const seoTitle =
-    aiData?.seo_title ||
-    `Pronóstico ${fixture.homeTeam} vs ${fixture.awayTeam} hoy | ${fixture.league} | DeportivosPro`;
-  const seoDescription =
-    aiData?.seo_description ||
-    `Análisis de ${fixture.homeTeam} vs ${fixture.awayTeam} en ${fixture.league}. Pronóstico y datos clave del partido de hoy.`;
+  const seo = buildPredictionSeo({
+    seo_title: aiData?.seo_title,
+    seo_description: aiData?.seo_description,
+    homeTeam: { name: fixture.homeTeam },
+    awayTeam: { name: fixture.awayTeam },
+    league: fixture.league,
+    prediction: pick,
+    date: fixture.match_date,
+    tier,
+  });
   return {
     sport: fixture.sport,
     league: fixture.league,
@@ -97,8 +102,8 @@ function toPredictionRecord(fixture, tier, aiData, index = 0) {
     hours: fixture.match_hour,
     source: "ai-engine",
     analysis: aiData?.analysis || `${tier.toUpperCase()}: predicción generada por motor propio IA + reglas.`,
-    seo_title: seoTitle,
-    seo_description: seoDescription,
+    seo_title: seo.seo_title,
+    seo_description: seo.seo_description,
     slug: toSlug(`${fixture.match_date}-${fixture.homeTeam}-vs-${fixture.awayTeam}-${tier}-${index + 1}`),
   };
 }

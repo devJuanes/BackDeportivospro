@@ -1,6 +1,7 @@
 const { db } = require("../config/database");
 const { formatDateInTimezone } = require("../utils/helpers");
 const { normalizeMatchHour } = require("../utils/matchHour");
+const { buildPredictionSeo } = require("../utils/predictionSeo");
 const FREE_TABLE = process.env.FACTORY_FREE_TABLE || "free_picks";
 
 function todayIsoDate() {
@@ -49,6 +50,7 @@ async function getFreePredictions(limit = 100, filters = {}) {
 async function createFreePrediction(payload) {
   const matchHour = normalizeMatchHour(payload.hours || payload.match_hour);
   const sport = String(payload.sport || "football").trim().toLowerCase() || "football";
+  const seo = buildPredictionSeo({ ...payload, tier: "free" });
   const { data, error } = await db.from(FREE_TABLE).insert({
     league: payload.league,
     team_a: payload.homeTeam?.name || payload.home_team_name,
@@ -64,8 +66,8 @@ async function createFreePrediction(payload) {
     status: "pending",
     moderation_status: "pending",
     moderation_note: payload.moderation_note || null,
-    seo_title: payload.seo_title || null,
-    seo_description: payload.seo_description || null,
+    seo_title: seo.seo_title || null,
+    seo_description: seo.seo_description || null,
   });
 
   if (error) {

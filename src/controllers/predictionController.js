@@ -129,7 +129,10 @@ async function getSeoUrls(req, res, next) {
   try {
     const rawLimit = Number.parseInt(String(req.query.limit || ""), 10);
     const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 50), 2000) : 500;
-    const urlEntries = await buildSeoUrlEntries(limit);
+    const includeStandard = String(req.query.includeStandard || "true").toLowerCase() !== "false";
+    const includeLive = String(req.query.includeLive || "true").toLowerCase() !== "false";
+    const includeBlog = ["1", "true", "yes"].includes(String(req.query.includeBlog || "").toLowerCase());
+    const urlEntries = await buildSeoUrlEntries(limit, { includeStandard, includeLive, includeBlog });
     return res.json({
       total: Math.min(urlEntries.length, limit),
       urls: urlEntries.slice(0, limit),
@@ -197,6 +200,43 @@ async function fetchFreeStandardPickRowsForSeo(limit) {
   }
 
   return combined;
+}
+
+function todayIsoDate() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function buildStaticSitemapEntries() {
+  const today = todayIsoDate();
+  return [
+    "/",
+    "/pronosticos",
+    "/resultados-en-vivo",
+    "/estadisticas",
+    "/ligas",
+    "/contacto",
+    "/sobre-nosotros",
+    "/predictions/free",
+    "/predictions/vip",
+    "/predictions/live",
+    "/news",
+    "/previas",
+    "/subscribe/vip",
+    "/como-funciona",
+    "/estrategias-apuestas",
+    "/estadisticas-futbol",
+    "/glosario-apuestas",
+  ].map((path) => ({ path, lastmod: today }));
+}
+
+function uniqueEntries(entries) {
+  const seen = new Set();
+  return (entries || []).filter((u) => {
+    const p = String(u?.path || "").trim();
+    if (!p || seen.has(p)) return false;
+    seen.add(p);
+    return true;
+  });
 }
 
 async function buildSeoUrlEntries(limit, options = {}) {
@@ -315,40 +355,32 @@ async function getSeoSitemapXml(req, res, next) {
     const base = getAppBaseUrl();
     const rawLimit = Number.parseInt(String(req.query.limit || ""), 10);
     const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 50), 5000) : 2000;
-    const entries = await buildSeoUrlEntries(limit, {
-      includeStandard: true,
-      includeLive: true,
-      includeBlog: true,
-      liveLimit: Math.min(limit, 500),
-    });
-    const staticPaths = [
-      "/",
-      "/predictions/free",
-      "/predictions/vip",
-      "/predictions/live",
-      "/news",
-      "/previas",
-      "/como-funciona",
-      "/estrategias-apuestas",
-      "/estadisticas-futbol",
-      "/glosario-apuestas",
-      "/sobre-matupicks",
-    ];
-    const staticEntries = staticPaths.map((path) => ({ path, lastmod: new Date().toISOString().slice(0, 10) }));
-    const merged = [...staticEntries, ...entries, { path: "/news", lastmod: new Date().toISOString().slice(0, 10) }];
-    const seen = new Set();
-    const unique = merged.filter((u) => {
-      const p = String(u.path || "").trim();
-      if (!p || seen.has(p)) return false;
-      seen.add(p);
-      return true;
-    });
+    let entries = [];
+    try {
+      entries = await buildSeoUrlEntries(limit, {
+        includeStandard: true,
+        includeLive: true,
+        includeBlog: true,
+        liveLimit: Math.min(limit, 500),
+      });
+    } catch (innerError) {
+      console.error("[seo] error buildSeoUrlEntries sitemap.xml:", innerError?.message || innerError);
+      entries = [];
+    }
+    const unique = uniqueEntries([...buildStaticSitemapEntries(), ...entries]);
     const xml = toSitemapXml(base, unique);
     res.set("Content-Type", "application/xml; charset=utf-8");
     res.set("Cache-Control", "public, max-age=300");
     return res.status(200).send(xml);
   } catch (error) {
-    return next(error);
+    try {
+      const xml = toSitemapXml(getAppBaseUrl(), buildStaticSitemapEntries());
+      res.set("Content-Type", "application/xml; charset=utf-8");
+      res.set("Cache-Control", "public, max-age=300");
+      return res.status(200).send(xml);
+    } catch {
+      return next(error);
+    }
   }
 }
 
@@ -363,7 +395,15 @@ async function getSeoSitemapPronosticosXml(req, res, next) {
     res.set("Cache-Control", "public, max-age=300");
     return res.status(200).send(xml);
   } catch (error) {
-    return next(error);
+    try {
+      const fallback = buildStaticSitemapEntries().filter((u) => u.path === "/" || u.path === "/pronosticos");
+      const xml = toSitemapXml(getAppBaseUrl(), fallback);
+      res.set("Content-Type", "application/xml; charset=utf-8");
+      res.set("Cache-Control", "public, max-age=300");
+      return res.status(200).send(xml);
+    } catch {
+      return next(error);
+    }
   }
 }
 
@@ -383,7 +423,15 @@ async function getSeoSitemapLiveXml(req, res, next) {
     res.set("Cache-Control", "public, max-age=300");
     return res.status(200).send(xml);
   } catch (error) {
-    return next(error);
+    try {
+      const fallback = buildStaticSitemapEntries().filter((u) => u.path === "/" || u.path === "/resultados-en-vivo");
+      const xml = toSitemapXml(getAppBaseUrl(), fallback);
+      res.set("Content-Type", "application/xml; charset=utf-8");
+      res.set("Cache-Control", "public, max-age=300");
+      return res.status(200).send(xml);
+    } catch {
+      return next(error);
+    }
   }
 }
 
@@ -398,7 +446,15 @@ async function getSeoSitemapBlogXml(req, res, next) {
     res.set("Cache-Control", "public, max-age=300");
     return res.status(200).send(xml);
   } catch (error) {
-    return next(error);
+    try {
+      const fallback = buildStaticSitemapEntries().filter((u) => ["/", "/news", "/previas"].includes(u.path));
+      const xml = toSitemapXml(getAppBaseUrl(), fallback);
+      res.set("Content-Type", "application/xml; charset=utf-8");
+      res.set("Cache-Control", "public, max-age=300");
+      return res.status(200).send(xml);
+    } catch {
+      return next(error);
+    }
   }
 }
 
