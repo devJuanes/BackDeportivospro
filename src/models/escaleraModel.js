@@ -23,9 +23,20 @@ async function getActiveSession(userId) {
 }
 
 async function createSession(input) {
-  const { data, error } = await db.from(TABLES.sessions).insert(input).select("*").single();
+  const { data, error } = await db.from(TABLES.sessions).insert(input);
   if (error) throw new Error(error.message);
-  return data;
+  if (data) return Array.isArray(data) ? data[0] : data;
+  const { data: row, error: fetchError } = await db
+    .from(TABLES.sessions)
+    .select("*")
+    .eq("user_id", input.user_id)
+    .eq("status", "open")
+    .order("opened_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (fetchError) throw new Error(fetchError.message);
+  if (!row) throw new Error("No se pudo recuperar la sesión creada");
+  return row;
 }
 
 async function updateSession(id, patch) {
@@ -76,9 +87,20 @@ async function getLastStep(sessionId) {
 }
 
 async function createStep(input) {
-  const { data, error } = await db.from(TABLES.steps).insert(input).select("*").single();
+  const { data, error } = await db.from(TABLES.steps).insert(input);
   if (error) throw new Error(error.message);
-  return data;
+  if (data) return Array.isArray(data) ? data[0] : data;
+  const { data: row, error: fetchError } = await db
+    .from(TABLES.steps)
+    .select("*")
+    .eq("session_id", input.session_id)
+    .eq("step_index", input.step_index)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (fetchError) throw new Error(fetchError.message);
+  if (!row) throw new Error("No se pudo recuperar el paso creado");
+  return row;
 }
 
 async function updateStep(id, patch) {
@@ -131,11 +153,20 @@ async function upsertUserToken(userId, token, deviceInfo = {}) {
     .upsert(
       { user_id: userId, token, app_id: "matupicks", device_info: deviceInfo, last_used_at: new Date().toISOString() },
       { onConflict: "user_id,app_id,token" }
-    )
-    .select("*")
-    .single();
+    );
   if (error) throw new Error(error.message);
-  return data;
+  if (data) return Array.isArray(data) ? data[0] : data;
+  const { data: row, error: fetchError } = await db
+    .from(TABLES.tokens)
+    .select("*")
+    .eq("user_id", userId)
+    .eq("token", token)
+    .eq("app_id", "matupicks")
+    .limit(1)
+    .maybeSingle();
+  if (fetchError) throw new Error(fetchError.message);
+  if (!row) throw new Error("No se pudo recuperar el token registrado");
+  return row;
 }
 
 async function deleteUserToken(userId, token) {
@@ -159,9 +190,21 @@ async function getUserTokens(userId) {
 }
 
 async function createNotificationLog(row) {
-  const { data, error } = await db.from(TABLES.logs).insert(row).select("*").single();
+  const { data, error } = await db.from(TABLES.logs).insert(row);
   if (error) throw new Error(error.message);
-  return data;
+  if (data) return Array.isArray(data) ? data[0] : data;
+  const { data: inserted, error: fetchError } = await db
+    .from(TABLES.logs)
+    .select("*")
+    .eq("user_id", row.user_id)
+    .eq("source_kind", row.source_kind)
+    .eq("source_id", row.source_id)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (fetchError) throw new Error(fetchError.message);
+  if (!inserted) throw new Error("No se pudo recuperar el log de notificación creado");
+  return inserted;
 }
 
 async function updateNotificationLog(id, patch) {
