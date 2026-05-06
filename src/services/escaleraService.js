@@ -46,11 +46,12 @@ function isFreshLiveCandidate(row, now) {
   const state = String(row.state || "").toLowerCase();
   if (state && state !== "live" && state !== "inplay" && state !== "in_play") return false;
   const minute = Number(row.minute);
-  if (Number.isFinite(minute) && minute > 90) return false;
+  // Incluye prórroga (90+), pero descarta señales claramente fuera de rango.
+  if (Number.isFinite(minute) && (minute < 0 || minute > 135)) return false;
   const createdAt = row.created_at ? new Date(String(row.created_at)) : null;
   if (!createdAt || Number.isNaN(createdAt.getTime())) return true;
-  // Señales live demasiado viejas no sirven para Escalera.
-  return now.getTime() - createdAt.getTime() <= 90 * 60 * 1000;
+  // Ventana más amplia para no perder live válidos cuando el proveedor retrasa updates.
+  return now.getTime() - createdAt.getTime() <= 4 * 60 * 60 * 1000;
 }
 
 function formatCandidateMatchTime(row, now, today) {
