@@ -69,7 +69,22 @@ function formatCandidateMatchTime(row, now, today) {
   return `${yyyy}-${mm}-${dd} ${hh}:${mi}`;
 }
 
-async function pickCandidate({ excludeKeys = new Set() } = {}) {
+function normalizeSigPart(v) {
+  return String(v || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+}
+
+function buildCandidateSignature(row) {
+  return [
+    normalizeSigPart(row.team_a || row.home_team_name || row.home_team),
+    normalizeSigPart(row.team_b || row.away_team_name || row.away_team),
+    normalizeSigPart(row.pick_text || row.prediction || row.market),
+  ].join("|");
+}
+
+async function pickCandidate({ excludeKeys = new Set(), excludeSignatures = new Set() } = {}) {
   const now = new Date();
   const today = now.toISOString().slice(0, 10);
   const toMinutes = (row) => {
@@ -165,6 +180,7 @@ async function pickCandidate({ excludeKeys = new Set() } = {}) {
   const ranked = bucket
     .filter((c) => c.row.pick_text && c.row.team_a && c.row.team_b)
     .filter((c) => !excludeKeys.has(`${c.source}:${String(c.row.id || "")}`))
+    .filter((c) => !excludeSignatures.has(buildCandidateSignature(c.row)))
     .sort((a, b) => {
       const sourceScore = (s) =>
         s === "abetlive" ? 0 : s === "vip_picks" ? 1 : s === "free_picks" ? 2 : s === "fixtures_cache" ? 3 : 9;
@@ -228,9 +244,15 @@ async function generateRecommendation(session, stepIndex, candidate) {
       "No devuelvas 'por definir', 'mercado seguro' ni placeholders.",
     ].join("\n");
     const ai = await callChatModel(prompt, "Responde JSON compacto.");
+    // Anti-hallucination: el partido/mercado debe respetar el candidato seleccionado.
+    // La IA solo ajusta rationale/confianza/stake/cuota.
     return {
       ...fallback,
-      ...ai,
+      rationale: ai?.rationale || fallback.rationale,
+      confidence: ai?.confidence,
+      recommended_stake: ai?.recommended_stake,
+      recommended_odds: ai?.recommended_odds,
+      source: ai?.source || fallback.source,
       recommended_stake: Math.max(1, toNum(ai.recommended_stake, fallback.recommended_stake)),
       recommended_odds: Math.max(1.01, toNum(ai.recommended_odds, fallback.recommended_odds)),
       confidence: Math.min(100, Math.max(0, toNum(ai.confidence, fallback.confidence))),
@@ -325,7 +347,7 @@ async function generateNext(userId, sessionId) {
   const nextIndex = (last?.step_index || 0) + 1;
   const sessionSteps = await db
     .from("ladder_steps")
-    .select("prediction_source,prediction_ref_id")
+    .select("prediction_source,prediction_ref_id,prediction_payload")
     .eq("session_id", session.id)
     .limit(200);
   const usedKeys = new Set(
@@ -333,7 +355,21 @@ async function generateNext(userId, sessionId) {
       .filter((r) => r.prediction_source && r.prediction_ref_id)
       .map((r) => `${r.prediction_source}:${String(r.prediction_ref_id)}`)
   );
-  const candidate = await pickCandidate({ excludeKeys: usedKeys });
+  const usedSignatures = new Set(
+    (sessionSteps?.data || [])
+      .map((r) => {
+        const payload = r?.prediction_payload || {};
+        const match = String(payload.match || "");
+        const parts = match.split(/\s+vs\s+/i);
+        return [
+          normalizeSigPart(parts[0] || match),
+          normalizeSigPart(parts[1] || ""),
+          normalizeSigPart(payload.market || ""),
+        ].join("|");
+      })
+      .filter((sig) => sig !== "||")
+  );
+  const candidate = await pickCandidate({ excludeKeys: usedKeys, excludeSignatures: usedSignatures });
   const rec = await generateRecommendation(session, nextIndex, candidate);
   const step = await model.createStep({
     session_id: session.id,
