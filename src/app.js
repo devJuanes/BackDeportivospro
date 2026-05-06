@@ -87,6 +87,9 @@ app.use("/api/payments", paymentsRoutes);
 app.use("/api/blog", blogRoutes);
 app.use("/api/escalera", escaleraRoutes);
 app.use("/api/notifications", notificationsRoutes);
+// Compatibilidad con clientes que usan prefijo por proyecto (MatuHttpClient Android).
+app.use("/api/projects/:projectId/escalera", escaleraRoutes);
+app.use("/api/projects/:projectId/notifications", notificationsRoutes);
 
 app.use((req, res) => {
   res.status(404).json({ error: "Ruta no encontrada" });
