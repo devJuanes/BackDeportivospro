@@ -196,7 +196,7 @@ async function sendEscaleraPush(userId, title, body, data, sourceId) {
   try {
     const tokens = await model.getUserTokens(userId);
     if (!tokens.length) {
-      await model.updateNotificationLog(log.id, { status: "failed", error_message: "No tokens" });
+      if (log?.id) await model.updateNotificationLog(log.id, { status: "failed", error_message: "No tokens" });
       return;
     }
     const result = await sendPushToTokens({
@@ -206,12 +206,14 @@ async function sendEscaleraPush(userId, title, body, data, sourceId) {
       data: { ...(data || {}), source_kind: "escalera", source_id: sourceId || "" },
       channelId: "escalera_updates",
     });
-    await model.updateNotificationLog(log.id, {
-      status: result.sentCount > 0 ? "sent" : "failed",
-      error_message: result.sentCount > 0 ? null : "FCM failed",
-    });
+    if (log?.id) {
+      await model.updateNotificationLog(log.id, {
+        status: result.sentCount > 0 ? "sent" : "failed",
+        error_message: result.sentCount > 0 ? null : "FCM failed",
+      });
+    }
   } catch (e) {
-    await model.updateNotificationLog(log.id, { status: "failed", error_message: e.message });
+    if (log?.id) await model.updateNotificationLog(log.id, { status: "failed", error_message: e.message });
   }
 }
 
@@ -307,6 +309,9 @@ async function acceptStep(userId, stepId, stakeActual, executedOdds) {
   if (!ses || ses.user_id !== userId) throw fail("No autorizado", 403);
   if (step.status !== "pending") throw fail("El step no está pendiente", 409);
   const stake = toNum(stakeActual, toNum(step.recommended_stake));
+  if (stake <= 0) throw fail("El stake debe ser mayor a 0");
+  if (stake > toNum(ses.capital_current)) throw fail("No puedes apostar más de tu capital actual", 409);
+  if (stake > toNum(ses.capital_initial)) throw fail("El stake no puede superar el capital inicial", 409);
   const odds = Math.max(1.01, toNum(executedOdds, toNum(step.recommended_odds)));
   const updated = await model.updateStep(step.id, {
     status: "accepted",
@@ -314,6 +319,8 @@ async function acceptStep(userId, stepId, stakeActual, executedOdds) {
     executed_odds: odds,
     decided_at: new Date().toISOString(),
   });
+  const afterAcceptBalance = +(toNum(ses.capital_current) - stake).toFixed(2);
+  await model.updateSession(ses.id, { capital_current: afterAcceptBalance });
   await model.insertEvent({ session_id: ses.id, step_id: step.id, event_type: "accept", payload: { stake, odds } });
   return updated;
 }
@@ -337,9 +344,11 @@ async function resolveStep(userId, stepId, outcome, executedOdds) {
   if (step.status !== "accepted") throw fail("Solo se resuelve un step accepted", 409);
   if (!["won", "lost"].includes(outcome)) throw fail("Outcome inválido");
   const stake = toNum(step.stake_actual, toNum(step.recommended_stake));
-  const odds = Math.max(1.01, toNum(executedOdds, toNum(step.executed_odds, toNum(step.recommended_odds))));
+  const odds = Math.max(1.01, toNum(step.executed_odds, toNum(step.recommended_odds)));
   const pnl = outcome === "won" ? +(stake * (odds - 1)).toFixed(2) : -Math.abs(stake);
-  const balance = +(toNum(ses.capital_current) + pnl).toFixed(2);
+  const balance = outcome === "won"
+    ? +(toNum(ses.capital_current) + stake * odds).toFixed(2)
+    : +toNum(ses.capital_current).toFixed(2);
   await model.updateStep(step.id, {
     status: outcome,
     executed_odds: odds,

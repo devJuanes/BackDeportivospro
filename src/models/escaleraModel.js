@@ -9,6 +9,11 @@ const TABLES = {
   logs: "notification_logs",
 };
 
+function isMissingTableError(error) {
+  const msg = String(error?.message || error || "").toLowerCase();
+  return msg.includes("table does not exist") || msg.includes("relation") && msg.includes("does not exist");
+}
+
 async function getActiveSession(userId) {
   const { data, error } = await db
     .from(TABLES.sessions)
@@ -44,10 +49,13 @@ async function updateSession(id, patch) {
     .from(TABLES.sessions)
     .update(patch)
     .eq("id", id)
-    .select("*")
-    .single();
+    .limit(1);
   if (error) throw new Error(error.message);
-  return data;
+  if (data) return Array.isArray(data) ? data[0] : data;
+  const { data: row, error: fetchError } = await db.from(TABLES.sessions).select("*").eq("id", id).maybeSingle();
+  if (fetchError) throw new Error(fetchError.message);
+  if (!row) throw new Error("No se pudo recuperar la sesión actualizada");
+  return row;
 }
 
 async function listSessionHistory(userId, limit = 20) {
@@ -108,10 +116,13 @@ async function updateStep(id, patch) {
     .from(TABLES.steps)
     .update(patch)
     .eq("id", id)
-    .select("*")
-    .single();
+    .limit(1);
   if (error) throw new Error(error.message);
-  return data;
+  if (data) return Array.isArray(data) ? data[0] : data;
+  const { data: row, error: fetchError } = await db.from(TABLES.steps).select("*").eq("id", id).maybeSingle();
+  if (fetchError) throw new Error(fetchError.message);
+  if (!row) throw new Error("No se pudo recuperar el step actualizado");
+  return row;
 }
 
 async function getStepById(id) {
@@ -122,12 +133,18 @@ async function getStepById(id) {
 
 async function insertEvent(row) {
   const { error } = await db.from(TABLES.events).insert(row);
-  if (error) throw new Error(error.message);
+  if (error) {
+    if (isMissingTableError(error)) return;
+    throw new Error(error.message);
+  }
 }
 
 async function insertRecommendation(row) {
   const { error } = await db.from(TABLES.recos).insert(row);
-  if (error) throw new Error(error.message);
+  if (error) {
+    if (isMissingTableError(error)) return;
+    throw new Error(error.message);
+  }
 }
 
 async function recalcSessionCounters(sessionId) {
@@ -191,18 +208,23 @@ async function getUserTokens(userId) {
 
 async function createNotificationLog(row) {
   const { data, error } = await db.from(TABLES.logs).insert(row);
-  if (error) throw new Error(error.message);
+  if (error) {
+    if (isMissingTableError(error)) return null;
+    throw new Error(error.message);
+  }
   if (data) return Array.isArray(data) ? data[0] : data;
   const { data: inserted, error: fetchError } = await db
     .from(TABLES.logs)
     .select("*")
-    .eq("user_id", row.user_id)
-    .eq("source_kind", row.source_kind)
-    .eq("source_id", row.source_id)
+    .eq("recipient_id", row.recipient_id)
+    .eq("title", row.title)
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
-  if (fetchError) throw new Error(fetchError.message);
+  if (fetchError) {
+    if (isMissingTableError(fetchError)) return null;
+    throw new Error(fetchError.message);
+  }
   if (!inserted) throw new Error("No se pudo recuperar el log de notificación creado");
   return inserted;
 }
