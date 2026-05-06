@@ -19,14 +19,47 @@ async function pickCandidate() {
   if (!vip.error && vip.data?.length) return { source: "vip_picks", row: vip.data[0] };
   const free = await db.from("free_picks").select("*").eq("status", "pending").order("created_at", { ascending: false }).limit(1);
   if (!free.error && free.data?.length) return { source: "free_picks", row: free.data[0] };
+  const abetVip = await db.from("abetvip").select("*").eq("state", "pending").order("created_at", { ascending: false }).limit(1);
+  if (!abetVip.error && abetVip.data?.length) return { source: "abetvip", row: abetVip.data[0] };
+  const abet = await db.from("abet").select("*").eq("state", "pending").order("created_at", { ascending: false }).limit(1);
+  if (!abet.error && abet.data?.length) return { source: "abet", row: abet.data[0] };
+  const fixtures = await db
+    .from("fixtures_cache")
+    .select("league,home_team,away_team,match_date,match_time")
+    .gte("match_date", new Date().toISOString().slice(0, 10))
+    .order("match_date", { ascending: true })
+    .order("match_time", { ascending: true })
+    .limit(1);
+  if (!fixtures.error && fixtures.data?.length) {
+    const row = fixtures.data[0];
+    return {
+      source: "fixtures_cache",
+      row: {
+        team_a: row.home_team || "Local",
+        team_b: row.away_team || "Visitante",
+        league: row.league || "",
+        pick_text: `Doble oportunidad ${row.home_team || "Local"} o empate`,
+        odds: 1.65,
+        confidence: 68,
+        match_date: row.match_date || "",
+      },
+    };
+  }
   return null;
 }
 
 async function generateRecommendation(session, stepIndex, candidate) {
+  const teamA = candidate?.row?.team_a || candidate?.row?.home_team_name || candidate?.row?.homeTeam || "Local";
+  const teamB = candidate?.row?.team_b || candidate?.row?.away_team_name || candidate?.row?.awayTeam || "Visitante";
+  const market =
+    candidate?.row?.pick_text ||
+    candidate?.row?.prediction ||
+    candidate?.row?.market ||
+    "Más de 1.5 goles";
   const fallback = {
-    match: candidate ? `${candidate.row.team_a} vs ${candidate.row.team_b}` : "Partido por definir",
+    match: `${teamA} vs ${teamB}`,
     league: candidate?.row?.league || "",
-    market: candidate?.row?.pick_text || "Más de 1.5 goles",
+    market,
     recommended_stake: Math.max(1, Math.round(toNum(session.capital_current) * 0.12)),
     recommended_odds: Math.max(1.2, toNum(candidate?.row?.odds, 1.7)),
     confidence: Math.min(95, Math.max(55, toNum(candidate?.row?.confidence, 70))),
@@ -46,8 +79,8 @@ async function generateRecommendation(session, stepIndex, candidate) {
         step_index: stepIndex,
         candidate: candidate ? {
           league: candidate.row.league,
-          match: `${candidate.row.team_a} vs ${candidate.row.team_b}`,
-          market: candidate.row.pick_text,
+          match: `${teamA} vs ${teamB}`,
+          market,
           odds: candidate.row.odds,
           confidence: candidate.row.confidence,
         } : null,
