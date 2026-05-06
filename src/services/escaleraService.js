@@ -98,8 +98,8 @@ async function pickCandidate({ excludeKeys = new Set(), excludeSignatures = new 
     row: {
       id: row.id,
       league: row.league || row.sport || "",
-      team_a: row.team_a || row.home_team_name || row.home_team || "Local",
-      team_b: row.team_b || row.away_team_name || row.away_team || "Visitante",
+      team_a: row.team_a || row.home_team_name || row.home_team || "",
+      team_b: row.team_b || row.away_team_name || row.away_team || "",
       pick_text: row.pick_text || row.prediction || row.market || "",
       confidence: toNum(row.confidence, 67),
       odds: toNum(row.odds, 1.65),
@@ -196,13 +196,15 @@ async function pickCandidate({ excludeKeys = new Set(), excludeSignatures = new 
 }
 
 async function generateRecommendation(session, stepIndex, candidate) {
-  const teamA = candidate?.row?.team_a || candidate?.row?.home_team_name || candidate?.row?.homeTeam || "Local";
-  const teamB = candidate?.row?.team_b || candidate?.row?.away_team_name || candidate?.row?.awayTeam || "Visitante";
+  if (!candidate?.row?.team_a || !candidate?.row?.team_b || !candidate?.row?.pick_text) {
+    throw fail("No hay pronósticos vigentes y confiables en este momento. Intenta en unos minutos.", 409);
+  }
+  const teamA = candidate.row.team_a;
+  const teamB = candidate.row.team_b;
   const market =
-    candidate?.row?.pick_text ||
-    candidate?.row?.prediction ||
-    candidate?.row?.market ||
-    "Más de 1.5 goles";
+    candidate.row.pick_text ||
+    candidate.row.prediction ||
+    candidate.row.market;
   const target = Math.max(0, toNum(session.daily_target) - Math.max(0, toNum(session.capital_current) - toNum(session.capital_initial)));
   const dynamicFraction = Math.min(0.22, Math.max(0.08, 0.09 + stepIndex * 0.015));
   const stakeByBank = Math.round(toNum(session.capital_current) * dynamicFraction);
@@ -215,10 +217,10 @@ async function generateRecommendation(session, stepIndex, candidate) {
     recommended_odds: Math.max(1.2, toNum(candidate?.row?.odds, 1.7)),
     confidence: Math.min(95, Math.max(55, toNum(candidate?.row?.confidence, 70))),
     rationale:
-      candidate?.row?.analysis ||
+      candidate.row.analysis ||
       "Stake conservador para sostener la escalera con riesgo controlado.",
-    match_time: candidate ? formatCandidateMatchTime({ ...candidate.row, source: candidate.source }, new Date(), new Date().toISOString().slice(0, 10)) : "",
-    source: candidate?.source || "ai",
+    match_time: formatCandidateMatchTime({ ...candidate.row, source: candidate.source }, new Date(), new Date().toISOString().slice(0, 10)),
+    source: candidate.source || "ai",
     model: "fallback",
   };
   if (!isAiEnabled()) return fallback;
@@ -369,7 +371,15 @@ async function generateNext(userId, sessionId) {
       })
       .filter((sig) => sig !== "||")
   );
-  const candidate = await pickCandidate({ excludeKeys: usedKeys, excludeSignatures: usedSignatures });
+  let candidate = await pickCandidate({ excludeKeys: usedKeys, excludeSignatures: usedSignatures });
+  // Fallback controlado: si agotamos candidatos por exclusión, permitimos reutilizar alguno
+  // vigente del día antes de inventar un pick genérico.
+  if (!candidate) {
+    candidate = await pickCandidate({ excludeKeys: new Set(), excludeSignatures: new Set() });
+  }
+  if (!candidate) {
+    throw fail("No hay pronósticos vigentes del día para Escalera ahora mismo.", 409);
+  }
   const rec = await generateRecommendation(session, nextIndex, candidate);
   const step = await model.createStep({
     session_id: session.id,
