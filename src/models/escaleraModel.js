@@ -6,7 +6,9 @@ const TABLES = {
   events: "ladder_events",
   recos: "ladder_recommendations",
   tokens: "notification_tokens",
+  tokensAlt: "project_push_tokens",
   logs: "notification_logs",
+  logsAlt: "project_notification_deliveries",
 };
 
 function isMissingTableError(error) {
@@ -165,51 +167,95 @@ async function recalcSessionCounters(sessionId) {
 }
 
 async function upsertUserToken(userId, token, deviceInfo = {}) {
-  const { data, error } = await db
+  const primary = await db
     .from(TABLES.tokens)
     .upsert(
       { user_id: userId, token, app_id: "matupicks", device_info: deviceInfo, last_used_at: new Date().toISOString() },
       { onConflict: "user_id,app_id,token" }
     );
-  if (error) throw new Error(error.message);
-  if (data) return Array.isArray(data) ? data[0] : data;
+  if (!primary.error) {
+    const { data: row } = await db
+      .from(TABLES.tokens)
+      .select("*")
+      .eq("user_id", userId)
+      .eq("token", token)
+      .eq("app_id", "matupicks")
+      .limit(1)
+      .maybeSingle();
+    return row || { user_id: userId, token, app_id: "matupicks" };
+  }
+  if (!isMissingTableError(primary.error)) throw new Error(primary.error.message);
+
+  const fallback = await db
+    .from(TABLES.tokensAlt)
+    .upsert(
+      { user_id: userId, fcm_token: token, platform: "android", device_info: deviceInfo, last_seen_at: new Date().toISOString() },
+      { onConflict: "user_id,fcm_token" }
+    );
+  if (fallback.error) throw new Error(fallback.error.message);
   const { data: row, error: fetchError } = await db
-    .from(TABLES.tokens)
+    .from(TABLES.tokensAlt)
     .select("*")
     .eq("user_id", userId)
-    .eq("token", token)
-    .eq("app_id", "matupicks")
+    .eq("fcm_token", token)
     .limit(1)
     .maybeSingle();
   if (fetchError) throw new Error(fetchError.message);
-  if (!row) throw new Error("No se pudo recuperar el token registrado");
-  return row;
+  return row || { user_id: userId, fcm_token: token };
 }
 
 async function deleteUserToken(userId, token) {
-  const { error } = await db
+  const primary = await db
     .from(TABLES.tokens)
     .delete()
     .eq("user_id", userId)
     .eq("token", token)
     .eq("app_id", "matupicks");
+  if (!primary.error) return;
+  if (!isMissingTableError(primary.error)) throw new Error(primary.error.message);
+  const { error } = await db
+    .from(TABLES.tokensAlt)
+    .delete()
+    .eq("user_id", userId)
+    .eq("fcm_token", token);
   if (error) throw new Error(error.message);
 }
 
 async function getUserTokens(userId) {
-  const { data, error } = await db
+  const primary = await db
     .from(TABLES.tokens)
     .select("token")
     .eq("user_id", userId)
     .eq("app_id", "matupicks");
+  if (!primary.error) return (primary.data || []).map((r) => r.token).filter(Boolean);
+  if (!isMissingTableError(primary.error)) throw new Error(primary.error.message);
+  const { data, error } = await db
+    .from(TABLES.tokensAlt)
+    .select("fcm_token")
+    .eq("user_id", userId);
   if (error) throw new Error(error.message);
-  return (data || []).map((r) => r.token).filter(Boolean);
+  return (data || []).map((r) => r.fcm_token).filter(Boolean);
 }
 
 async function createNotificationLog(row) {
   const { data, error } = await db.from(TABLES.logs).insert(row);
   if (error) {
-    if (isMissingTableError(error)) return null;
+    if (isMissingTableError(error)) {
+      const sourceKind = String(row?.payload?.source_kind || "escalera");
+      const sourceId = String(row?.payload?.source_id || row?.id || Date.now());
+      const fallback = await db
+        .from(TABLES.logsAlt)
+        .insert({
+          user_id: row.recipient_id,
+          source_kind: sourceKind,
+          source_id: sourceId,
+          payload: row.payload || {},
+        });
+      if (fallback.error && !isMissingTableError(fallback.error)) {
+        throw new Error(fallback.error.message);
+      }
+      return null;
+    }
     throw new Error(error.message);
   }
   if (data) return Array.isArray(data) ? data[0] : data;
