@@ -15,37 +15,111 @@ function fail(message, status = 400) {
 }
 
 async function pickCandidate() {
-  const vip = await db.from("vip_picks").select("*").eq("status", "pending").order("created_at", { ascending: false }).limit(1);
-  if (!vip.error && vip.data?.length) return { source: "vip_picks", row: vip.data[0] };
-  const free = await db.from("free_picks").select("*").eq("status", "pending").order("created_at", { ascending: false }).limit(1);
-  if (!free.error && free.data?.length) return { source: "free_picks", row: free.data[0] };
-  const abetVip = await db.from("abetvip").select("*").eq("state", "pending").order("created_at", { ascending: false }).limit(1);
-  if (!abetVip.error && abetVip.data?.length) return { source: "abetvip", row: abetVip.data[0] };
-  const abet = await db.from("abet").select("*").eq("state", "pending").order("created_at", { ascending: false }).limit(1);
-  if (!abet.error && abet.data?.length) return { source: "abet", row: abet.data[0] };
+  const now = new Date();
+  const today = now.toISOString().slice(0, 10);
+  const toMinutes = (row) => {
+    const date = String(row.match_date || today);
+    const hhmm = String(row.match_hour || row.match_time || "12:00");
+    const [hRaw, mRaw] = hhmm.split(":");
+    const h = Number.parseInt(hRaw || "12", 10);
+    const m = Number.parseInt(mRaw || "0", 10);
+    if (!Number.isFinite(h) || !Number.isFinite(m)) return Number.MAX_SAFE_INTEGER;
+    const dt = new Date(`${date}T${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:00`);
+    return Math.max(0, Math.round((dt.getTime() - now.getTime()) / 60000));
+  };
+
+  const normalize = (source, row) => ({
+    source,
+    row: {
+      id: row.id,
+      league: row.league || row.sport || "",
+      team_a: row.team_a || row.home_team_name || row.home_team || "Local",
+      team_b: row.team_b || row.away_team_name || row.away_team || "Visitante",
+      pick_text: row.pick_text || row.prediction || row.market || "",
+      confidence: toNum(row.confidence, 67),
+      odds: toNum(row.odds, 1.65),
+      analysis: row.analysis || row.ai_rationale || "",
+      match_date: row.match_date || today,
+      match_hour: row.match_hour || row.match_time || "",
+      minutes_to_start: toMinutes(row),
+    },
+  });
+
+  const bucket = [];
+
+  const vip = await db
+    .from("vip_picks")
+    .select("id,league,team_a,team_b,pick_text,odds,confidence,analysis,match_date")
+    .eq("moderation_status", "active")
+    .gte("match_date", today)
+    .order("match_date", { ascending: true })
+    .limit(40);
+  if (!vip.error) bucket.push(...(vip.data || []).map((r) => normalize("vip_picks", r)));
+
+  const free = await db
+    .from("free_picks")
+    .select("id,league,team_a,team_b,pick_text,odds,confidence,analysis,match_date")
+    .eq("moderation_status", "active")
+    .gte("match_date", today)
+    .order("match_date", { ascending: true })
+    .limit(40);
+  if (!free.error) bucket.push(...(free.data || []).map((r) => normalize("free_picks", r)));
+
+  const live = await db
+    .from("abetlive")
+    .select("id,league,home_team_name,away_team_name,prediction,odds,confidence,minute,created_at")
+    .order("created_at", { ascending: false })
+    .limit(12);
+  if (!live.error) {
+    bucket.push(
+      ...(live.data || []).map((r) =>
+        normalize("abetlive", {
+          ...r,
+          match_date: today,
+          match_hour: "",
+          analysis: `Señal live minuto ${toNum(r.minute, 0)}.`,
+        })
+      )
+    );
+  }
+
   const fixtures = await db
     .from("fixtures_cache")
-    .select("league,home_team,away_team,match_date,match_time")
-    .gte("match_date", new Date().toISOString().slice(0, 10))
+    .select("id,league,home_team,away_team,match_date,match_time")
+    .gte("match_date", today)
     .order("match_date", { ascending: true })
     .order("match_time", { ascending: true })
-    .limit(1);
-  if (!fixtures.error && fixtures.data?.length) {
-    const row = fixtures.data[0];
-    return {
-      source: "fixtures_cache",
-      row: {
-        team_a: row.home_team || "Local",
-        team_b: row.away_team || "Visitante",
-        league: row.league || "",
-        pick_text: `Doble oportunidad ${row.home_team || "Local"} o empate`,
-        odds: 1.65,
-        confidence: 68,
-        match_date: row.match_date || "",
-      },
-    };
+    .limit(25);
+  if (!fixtures.error) {
+    bucket.push(
+      ...(fixtures.data || []).map((r) =>
+        normalize("fixtures_cache", {
+          ...r,
+          pick_text: `Doble oportunidad ${r.home_team || "Local"} o empate`,
+          odds: 1.65,
+          confidence: 67,
+          analysis: "Pick base de seguridad para escalera.",
+        })
+      )
+    );
   }
-  return null;
+
+  if (!bucket.length) return null;
+
+  const ranked = bucket
+    .filter((c) => c.row.pick_text && c.row.team_a && c.row.team_b)
+    .sort((a, b) => {
+      const sourceScore = (s) =>
+        s === "vip_picks" ? 0 : s === "free_picks" ? 1 : s === "abetlive" ? 2 : s === "fixtures_cache" ? 3 : 9;
+      const sDiff = sourceScore(a.source) - sourceScore(b.source);
+      if (sDiff !== 0) return sDiff;
+      // Priorizar eventos cercanos para completar los pasos en el día.
+      const tDiff = a.row.minutes_to_start - b.row.minutes_to_start;
+      if (tDiff !== 0) return tDiff;
+      return b.row.confidence - a.row.confidence;
+    });
+
+  return ranked[0] || null;
 }
 
 async function generateRecommendation(session, stepIndex, candidate) {
@@ -56,15 +130,21 @@ async function generateRecommendation(session, stepIndex, candidate) {
     candidate?.row?.prediction ||
     candidate?.row?.market ||
     "Más de 1.5 goles";
+  const target = Math.max(0, toNum(session.daily_target) - Math.max(0, toNum(session.capital_current) - toNum(session.capital_initial)));
+  const dynamicFraction = Math.min(0.22, Math.max(0.08, 0.09 + stepIndex * 0.015));
+  const stakeByBank = Math.round(toNum(session.capital_current) * dynamicFraction);
+  const fallbackStake = Math.max(1, Math.min(stakeByBank, target > 0 ? target : stakeByBank));
   const fallback = {
     match: `${teamA} vs ${teamB}`,
     league: candidate?.row?.league || "",
     market,
-    recommended_stake: Math.max(1, Math.round(toNum(session.capital_current) * 0.12)),
+    recommended_stake: fallbackStake,
     recommended_odds: Math.max(1.2, toNum(candidate?.row?.odds, 1.7)),
     confidence: Math.min(95, Math.max(55, toNum(candidate?.row?.confidence, 70))),
-    rationale: "Stake conservador para sostener la escalera con riesgo controlado.",
-    match_time: candidate?.row?.match_date || "",
+    rationale:
+      candidate?.row?.analysis ||
+      "Stake conservador para sostener la escalera con riesgo controlado.",
+    match_time: [candidate?.row?.match_date, candidate?.row?.match_hour].filter(Boolean).join(" "),
     source: candidate?.source || "ai",
     model: "fallback",
   };
@@ -72,10 +152,12 @@ async function generateRecommendation(session, stepIndex, candidate) {
   try {
     const prompt = [
       "Devuelve SOLO JSON.",
-      "Genera recomendación de reto escalera:",
+      "Genera recomendación de reto escalera, de ALTA CALIDAD y accionable.",
+      "Debe incluir partido y mercado específico (no genérico), idealmente de horario cercano.",
       JSON.stringify({
         bankroll: toNum(session.capital_current),
         target: toNum(session.daily_target),
+        target_remaining: target,
         step_index: stepIndex,
         candidate: candidate ? {
           league: candidate.row.league,
@@ -86,6 +168,7 @@ async function generateRecommendation(session, stepIndex, candidate) {
         } : null,
       }),
       'Formato: {"match":"","league":"","market":"","recommended_stake":0,"recommended_odds":0,"confidence":0,"rationale":"","match_time":"","source":"ai"}',
+      "No devuelvas 'por definir', 'mercado seguro' ni placeholders.",
     ].join("\n");
     const ai = await callChatModel(prompt, "Responde JSON compacto.");
     return {
