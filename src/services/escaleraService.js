@@ -14,18 +14,49 @@ function fail(message, status = 400) {
   return e;
 }
 
-async function pickCandidate() {
+function toMatchDateTime(row, now, fallbackDate) {
+  const date = String(row.match_date || fallbackDate || now.toISOString().slice(0, 10));
+  const hhmm = String(row.match_hour || row.match_time || "").trim();
+  if (!hhmm) return null;
+  const [hRaw, mRaw] = hhmm.split(":");
+  const h = Number.parseInt(hRaw || "0", 10);
+  const m = Number.parseInt(mRaw || "0", 10);
+  if (!Number.isFinite(h) || !Number.isFinite(m)) return null;
+  const dt = new Date(`${date}T${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:00`);
+  return Number.isNaN(dt.getTime()) ? null : dt;
+}
+
+function isFreshStandardCandidate(row, now, fallbackDate) {
+  const dt = toMatchDateTime(row, now, fallbackDate);
+  if (!dt) {
+    // Si no hay hora exacta, aceptamos solo partidos de hoy/futuro.
+    const d = String(row.match_date || fallbackDate || "");
+    const today = now.toISOString().slice(0, 10);
+    return d >= today;
+  }
+  // Rechazar partidos claramente ya iniciados hace rato.
+  return dt.getTime() >= now.getTime() - 15 * 60 * 1000;
+}
+
+function isFreshLiveCandidate(row, now) {
+  if (row.live_ended === true) return false;
+  const state = String(row.state || "").toLowerCase();
+  if (state && state !== "live" && state !== "inplay" && state !== "in_play") return false;
+  const minute = Number(row.minute);
+  if (Number.isFinite(minute) && minute > 90) return false;
+  const createdAt = row.created_at ? new Date(String(row.created_at)) : null;
+  if (!createdAt || Number.isNaN(createdAt.getTime())) return true;
+  // Señales live demasiado viejas no sirven para Escalera.
+  return now.getTime() - createdAt.getTime() <= 2 * 60 * 60 * 1000;
+}
+
+async function pickCandidate({ excludeKeys = new Set() } = {}) {
   const now = new Date();
   const today = now.toISOString().slice(0, 10);
   const toMinutes = (row) => {
-    const date = String(row.match_date || today);
-    const hhmm = String(row.match_hour || row.match_time || "12:00");
-    const [hRaw, mRaw] = hhmm.split(":");
-    const h = Number.parseInt(hRaw || "12", 10);
-    const m = Number.parseInt(mRaw || "0", 10);
-    if (!Number.isFinite(h) || !Number.isFinite(m)) return Number.MAX_SAFE_INTEGER;
-    const dt = new Date(`${date}T${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:00`);
-    return Math.max(0, Math.round((dt.getTime() - now.getTime()) / 60000));
+    const dt = toMatchDateTime(row, now, today);
+    if (!dt) return Number.MAX_SAFE_INTEGER;
+    return Math.round((dt.getTime() - now.getTime()) / 60000);
   };
 
   const normalize = (source, row) => ({
@@ -49,30 +80,34 @@ async function pickCandidate() {
 
   const vip = await db
     .from("vip_picks")
-    .select("id,league,team_a,team_b,pick_text,odds,confidence,analysis,match_date")
+    .select("id,league,team_a,team_b,pick_text,odds,confidence,analysis,match_date,match_hour")
     .eq("moderation_status", "active")
     .gte("match_date", today)
     .order("match_date", { ascending: true })
     .limit(40);
-  if (!vip.error) bucket.push(...(vip.data || []).map((r) => normalize("vip_picks", r)));
+  if (!vip.error) {
+    bucket.push(...(vip.data || []).filter((r) => isFreshStandardCandidate(r, now, today)).map((r) => normalize("vip_picks", r)));
+  }
 
   const free = await db
     .from("free_picks")
-    .select("id,league,team_a,team_b,pick_text,odds,confidence,analysis,match_date")
+    .select("id,league,team_a,team_b,pick_text,odds,confidence,analysis,match_date,match_hour")
     .eq("moderation_status", "active")
     .gte("match_date", today)
     .order("match_date", { ascending: true })
     .limit(40);
-  if (!free.error) bucket.push(...(free.data || []).map((r) => normalize("free_picks", r)));
+  if (!free.error) {
+    bucket.push(...(free.data || []).filter((r) => isFreshStandardCandidate(r, now, today)).map((r) => normalize("free_picks", r)));
+  }
 
   const live = await db
     .from("abetlive")
-    .select("id,league,home_team_name,away_team_name,prediction,odds,confidence,minute,created_at")
+    .select("id,league,home_team_name,away_team_name,prediction,odds,confidence,minute,created_at,live_ended,state")
     .order("created_at", { ascending: false })
     .limit(12);
   if (!live.error) {
     bucket.push(
-      ...(live.data || []).map((r) =>
+      ...(live.data || []).filter((r) => isFreshLiveCandidate(r, now)).map((r) =>
         normalize("abetlive", {
           ...r,
           match_date: today,
@@ -92,7 +127,7 @@ async function pickCandidate() {
     .limit(25);
   if (!fixtures.error) {
     bucket.push(
-      ...(fixtures.data || []).map((r) =>
+      ...(fixtures.data || []).filter((r) => isFreshStandardCandidate(r, now, today)).map((r) =>
         normalize("fixtures_cache", {
           ...r,
           pick_text: `Doble oportunidad ${r.home_team || "Local"} o empate`,
@@ -108,6 +143,7 @@ async function pickCandidate() {
 
   const ranked = bucket
     .filter((c) => c.row.pick_text && c.row.team_a && c.row.team_b)
+    .filter((c) => !excludeKeys.has(`${c.source}:${String(c.row.id || "")}`))
     .sort((a, b) => {
       const sourceScore = (s) =>
         s === "vip_picks" ? 0 : s === "free_picks" ? 1 : s === "abetlive" ? 2 : s === "fixtures_cache" ? 3 : 9;
@@ -266,7 +302,17 @@ async function generateNext(userId, sessionId) {
   if (active) return { session, step: active };
   const last = await model.getLastStep(session.id);
   const nextIndex = (last?.step_index || 0) + 1;
-  const candidate = await pickCandidate();
+  const sessionSteps = await db
+    .from("ladder_steps")
+    .select("prediction_source,prediction_ref_id")
+    .eq("session_id", session.id)
+    .limit(200);
+  const usedKeys = new Set(
+    (sessionSteps?.data || [])
+      .filter((r) => r.prediction_source && r.prediction_ref_id)
+      .map((r) => `${r.prediction_source}:${String(r.prediction_ref_id)}`)
+  );
+  const candidate = await pickCandidate({ excludeKeys: usedKeys });
   const rec = await generateRecommendation(session, nextIndex, candidate);
   const step = await model.createStep({
     session_id: session.id,
