@@ -27,15 +27,18 @@ function toMatchDateTime(row, now, fallbackDate) {
 }
 
 function isFreshStandardCandidate(row, now, fallbackDate) {
+  const today = now.toISOString().slice(0, 10);
+  const dateOnly = String(row.match_date || fallbackDate || today);
+  // Escalera es diaria: solo picks del día actual.
+  if (dateOnly !== today) return false;
   const dt = toMatchDateTime(row, now, fallbackDate);
   if (!dt) {
-    // Si no hay hora exacta, aceptamos solo partidos de hoy/futuro.
-    const d = String(row.match_date || fallbackDate || "");
-    const today = now.toISOString().slice(0, 10);
-    return d >= today;
+    // Si no hay hora exacta, descartamos para evitar picks ambiguos/antiguos.
+    return false;
   }
-  // Rechazar partidos claramente ya iniciados hace rato.
-  return dt.getTime() >= now.getTime() - 15 * 60 * 1000;
+  const diffMin = Math.round((dt.getTime() - now.getTime()) / 60000);
+  // Rechazar partidos ya pasados y también muy lejanos (meta diaria).
+  return diffMin >= -15 && diffMin <= 240;
 }
 
 function isFreshLiveCandidate(row, now) {
@@ -47,7 +50,23 @@ function isFreshLiveCandidate(row, now) {
   const createdAt = row.created_at ? new Date(String(row.created_at)) : null;
   if (!createdAt || Number.isNaN(createdAt.getTime())) return true;
   // Señales live demasiado viejas no sirven para Escalera.
-  return now.getTime() - createdAt.getTime() <= 2 * 60 * 60 * 1000;
+  return now.getTime() - createdAt.getTime() <= 90 * 60 * 1000;
+}
+
+function formatCandidateMatchTime(row, now, today) {
+  if (String(row.source || "").toLowerCase() === "abetlive") {
+    const m = Number(row.minute);
+    if (Number.isFinite(m) && m >= 0) return `EN VIVO · min ${m}`;
+    return "EN VIVO";
+  }
+  const dt = toMatchDateTime(row, now, today);
+  if (!dt) return today;
+  const yyyy = dt.getFullYear();
+  const mm = String(dt.getMonth() + 1).padStart(2, "0");
+  const dd = String(dt.getDate()).padStart(2, "0");
+  const hh = String(dt.getHours()).padStart(2, "0");
+  const mi = String(dt.getMinutes()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd} ${hh}:${mi}`;
 }
 
 async function pickCandidate({ excludeKeys = new Set() } = {}) {
@@ -73,6 +92,7 @@ async function pickCandidate({ excludeKeys = new Set() } = {}) {
       match_date: row.match_date || today,
       match_hour: row.match_hour || row.match_time || "",
       minutes_to_start: toMinutes(row),
+      is_live: source === "abetlive",
     },
   });
 
@@ -110,6 +130,7 @@ async function pickCandidate({ excludeKeys = new Set() } = {}) {
       ...(live.data || []).filter((r) => isFreshLiveCandidate(r, now)).map((r) =>
         normalize("abetlive", {
           ...r,
+          source: "abetlive",
           match_date: today,
           match_hour: "",
           analysis: `Señal live minuto ${toNum(r.minute, 0)}.`,
@@ -146,11 +167,11 @@ async function pickCandidate({ excludeKeys = new Set() } = {}) {
     .filter((c) => !excludeKeys.has(`${c.source}:${String(c.row.id || "")}`))
     .sort((a, b) => {
       const sourceScore = (s) =>
-        s === "vip_picks" ? 0 : s === "free_picks" ? 1 : s === "abetlive" ? 2 : s === "fixtures_cache" ? 3 : 9;
+        s === "abetlive" ? 0 : s === "vip_picks" ? 1 : s === "free_picks" ? 2 : s === "fixtures_cache" ? 3 : 9;
       const sDiff = sourceScore(a.source) - sourceScore(b.source);
       if (sDiff !== 0) return sDiff;
-      // Priorizar eventos cercanos para completar los pasos en el día.
-      const tDiff = a.row.minutes_to_start - b.row.minutes_to_start;
+      // Priorizar eventos más inmediatos.
+      const tDiff = Math.abs(a.row.minutes_to_start) - Math.abs(b.row.minutes_to_start);
       if (tDiff !== 0) return tDiff;
       return b.row.confidence - a.row.confidence;
     });
@@ -180,7 +201,7 @@ async function generateRecommendation(session, stepIndex, candidate) {
     rationale:
       candidate?.row?.analysis ||
       "Stake conservador para sostener la escalera con riesgo controlado.",
-    match_time: [candidate?.row?.match_date, candidate?.row?.match_hour].filter(Boolean).join(" "),
+    match_time: candidate ? formatCandidateMatchTime({ ...candidate.row, source: candidate.source }, new Date(), new Date().toISOString().slice(0, 10)) : "",
     source: candidate?.source || "ai",
     model: "fallback",
   };
