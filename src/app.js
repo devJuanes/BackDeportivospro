@@ -10,6 +10,7 @@ const whatsappRoutes = require("./routes/whatsappRoutes");
 const paymentsRoutes = require("./routes/paymentsRoutes");
 const blogRoutes = require("./routes/blogRoutes");
 const escaleraRoutes = require("./routes/escaleraRoutes");
+const notificationsRoutes = require("./routes/notificationsRoutes");
 const { getSupportedSports } = require("./services/sportsService");
 const logger = require("./utils/logger");
 
@@ -85,6 +86,7 @@ app.use("/api/whatsapp", whatsappRoutes);
 app.use("/api/payments", paymentsRoutes);
 app.use("/api/blog", blogRoutes);
 app.use("/api/escalera", escaleraRoutes);
+app.use("/api/notifications", notificationsRoutes);
 
 app.use((req, res) => {
   res.status(404).json({ error: "Ruta no encontrada" });
