@@ -49,9 +49,8 @@ async function createSession(input) {
 async function updateSession(id, patch) {
   const { data, error } = await db
     .from(TABLES.sessions)
-    .update(patch)
     .eq("id", id)
-    .limit(1);
+    .update(patch);
   if (error) throw new Error(error.message);
   if (data) return Array.isArray(data) ? data[0] : data;
   const { data: row, error: fetchError } = await db.from(TABLES.sessions).select("*").eq("id", id).maybeSingle();
@@ -116,9 +115,8 @@ async function createStep(input) {
 async function updateStep(id, patch) {
   const { data, error } = await db
     .from(TABLES.steps)
-    .update(patch)
     .eq("id", id)
-    .limit(1);
+    .update(patch);
   if (error) throw new Error(error.message);
   if (data) return Array.isArray(data) ? data[0] : data;
   const { data: row, error: fetchError } = await db.from(TABLES.steps).select("*").eq("id", id).maybeSingle();
@@ -207,17 +205,17 @@ async function upsertUserToken(userId, token, deviceInfo = {}) {
 async function deleteUserToken(userId, token) {
   const primary = await db
     .from(TABLES.tokens)
-    .delete()
     .eq("user_id", userId)
     .eq("token", token)
-    .eq("app_id", "matupicks");
+    .eq("app_id", "matupicks")
+    .delete();
   if (!primary.error) return;
   if (!isMissingTableError(primary.error)) throw new Error(primary.error.message);
   const { error } = await db
     .from(TABLES.tokensAlt)
-    .delete()
     .eq("user_id", userId)
-    .eq("fcm_token", token);
+    .eq("fcm_token", token)
+    .delete();
   if (error) throw new Error(error.message);
 }
 
@@ -276,7 +274,7 @@ async function createNotificationLog(row) {
 }
 
 async function updateNotificationLog(id, patch) {
-  const { error } = await db.from(TABLES.logs).update(patch).eq("id", id);
+  const { error } = await db.from(TABLES.logs).eq("id", id).update(patch);
   if (error) throw new Error(error.message);
 }
 
