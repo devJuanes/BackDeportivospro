@@ -1,7 +1,10 @@
 /**
- * Decodificación JWT sin verificar firma (solo gate de rol para acciones internas).
- * En producción el token lo emite MatuDB Auth; la verificación criptográfica queda en el emisor.
+ * Decodificación / verificación de Bearer (Firebase ID token preferido).
+ * Si hay FIREBASE_SERVICE_ACCOUNT_*, se verifica la firma con Admin SDK.
+ * Si no, se decodifica el payload (mismo riesgo que el gate MatuDB anterior).
  */
+const { verifyIdToken, readUserProfile } = require("../services/firebaseAdmin");
+
 function decodeJwtPayload(token) {
   if (!token || typeof token !== "string") return null;
   const part = token.split(".")[1];
@@ -16,9 +19,14 @@ function decodeJwtPayload(token) {
   }
 }
 
+function stripBearer(authorizationHeader) {
+  const raw = String(authorizationHeader || "").trim();
+  return /^Bearer\s+/i.test(raw) ? raw.replace(/^Bearer\s+/i, "").trim() : "";
+}
+
 function roleFromPayload(payload) {
   if (!payload || typeof payload !== "object") return "";
-  if (payload.is_admin === true) return "admin";
+  if (payload.is_admin === true || payload.admin === true) return "admin";
   const direct = String(payload.role || "").toLowerCase();
   if (direct === "admin") return "admin";
   const app = payload.app_metadata;
@@ -34,44 +42,103 @@ function roleFromPayload(payload) {
   return direct;
 }
 
-/** Email en JWT (MatuDB Auth suele incluir `email` junto a `sub`). */
-function getEmailFromBearer(authorizationHeader) {
-  const raw = String(authorizationHeader || "").trim();
-  const token = /^Bearer\s+/i.test(raw) ? raw.replace(/^Bearer\s+/i, "").trim() : "";
-  if (!token) return null;
-  const payload = decodeJwtPayload(token);
-  if (!payload) return null;
-  const exp = Number(payload.exp);
-  if (Number.isFinite(exp) && exp * 1000 < Date.now()) return null;
+function emailFromPayload(payload) {
+  if (!payload || typeof payload !== "object") return null;
   const mail = payload.email;
-  if (typeof mail !== "string" || !mail.includes("@")) return null;
-  return mail.trim().toLowerCase();
+  if (typeof mail === "string" && mail.includes("@")) return mail.trim().toLowerCase();
+  return null;
 }
 
-/** Usuario autenticado (MatuDB JWT): `id` o `sub`, exp no vencido. */
-function getUserIdFromBearer(authorizationHeader) {
-  const raw = String(authorizationHeader || "").trim();
-  const token = /^Bearer\s+/i.test(raw) ? raw.replace(/^Bearer\s+/i, "").trim() : "";
-  if (!token) return null;
-  const payload = decodeJwtPayload(token);
-  if (!payload) return null;
-  const exp = Number(payload.exp);
-  if (Number.isFinite(exp) && exp * 1000 < Date.now()) return null;
-  const id = payload.id ?? payload.sub;
+function userIdFromPayload(payload) {
+  if (!payload || typeof payload !== "object") return null;
+  const id = payload.user_id ?? payload.uid ?? payload.id ?? payload.sub;
   if (id == null || String(id).length === 0) return null;
   return String(id);
 }
 
-/** Bearer admin + exp no vencido. */
+function expOk(payload) {
+  const exp = Number(payload?.exp);
+  if (Number.isFinite(exp) && exp * 1000 < Date.now()) return false;
+  return true;
+}
+
+/** Cache corta por token para no pegarle a Firebase en cada request. */
+const verifiedCache = new Map();
+const CACHE_MS = 60_000;
+
+async function resolveVerified(authorizationHeader) {
+  const token = stripBearer(authorizationHeader);
+  if (!token) return null;
+  const hit = verifiedCache.get(token);
+  if (hit && hit.until > Date.now()) return hit.value;
+
+  const verified = await verifyIdToken(token);
+  let value = null;
+  if (verified?.uid) {
+    value = {
+      uid: verified.uid,
+      email: verified.email,
+      admin: Boolean(verified.admin),
+      verified: true,
+    };
+  } else {
+    const payload = decodeJwtPayload(token);
+    if (payload && expOk(payload)) {
+      value = {
+        uid: userIdFromPayload(payload),
+        email: emailFromPayload(payload),
+        admin: roleFromPayload(payload) === "admin",
+        verified: false,
+      };
+    }
+  }
+
+  verifiedCache.set(token, { until: Date.now() + CACHE_MS, value });
+  return value;
+}
+
+function getEmailFromBearer(authorizationHeader) {
+  const token = stripBearer(authorizationHeader);
+  if (!token) return null;
+  const payload = decodeJwtPayload(token);
+  if (!payload || !expOk(payload)) return null;
+  return emailFromPayload(payload);
+}
+
+function getUserIdFromBearer(authorizationHeader) {
+  const token = stripBearer(authorizationHeader);
+  if (!token) return null;
+  const payload = decodeJwtPayload(token);
+  if (!payload || !expOk(payload)) return null;
+  return userIdFromPayload(payload);
+}
+
 function isAdminBearer(authorizationHeader) {
-  const raw = String(authorizationHeader || "").trim();
-  const token = /^Bearer\s+/i.test(raw) ? raw.replace(/^Bearer\s+/i, "").trim() : "";
+  const token = stripBearer(authorizationHeader);
   if (!token) return false;
   const payload = decodeJwtPayload(token);
-  if (!payload) return false;
-  const exp = Number(payload.exp);
-  if (Number.isFinite(exp) && exp * 1000 < Date.now()) return false;
+  if (!payload || !expOk(payload)) return false;
   return roleFromPayload(payload) === "admin";
+}
+
+async function getEmailFromBearerAsync(authorizationHeader) {
+  const v = await resolveVerified(authorizationHeader);
+  return v?.email || getEmailFromBearer(authorizationHeader);
+}
+
+async function getUserIdFromBearerAsync(authorizationHeader) {
+  const v = await resolveVerified(authorizationHeader);
+  return v?.uid || getUserIdFromBearer(authorizationHeader);
+}
+
+async function isAdminBearerAsync(authorizationHeader) {
+  const v = await resolveVerified(authorizationHeader);
+  if (v?.admin) return true;
+  if (v?.uid) {
+    const profile = await readUserProfile(v.uid);
+    if (profile && (profile.isAdmin === true || profile.is_admin === true)) return true;
+  }
+  return isAdminBearer(authorizationHeader);
 }
 
 module.exports = {
@@ -79,4 +146,8 @@ module.exports = {
   getEmailFromBearer,
   getUserIdFromBearer,
   isAdminBearer,
+  getEmailFromBearerAsync,
+  getUserIdFromBearerAsync,
+  isAdminBearerAsync,
+  resolveVerified,
 };

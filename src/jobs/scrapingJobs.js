@@ -10,6 +10,7 @@ const { getTodayFixturesBySport, getTodayFootballFixturesLatam } = require("../s
 const { prioritizeFixtures, diversifyFixtures } = require("../services/fixturePriorityService");
 const { getPredictionSourcePolicy, toHost } = require("../services/sourceService");
 const { generateAiPredictionsFromFixtures } = require("../services/aiForecastService");
+const { publishPickToProduction } = require("../services/productionPublishService");
 const { mergeDedupeByKey, normalizePickLabel, fixtureTierDedupeKey, normalizeTeamToken, pairKey } = require("../utils/predictionDedupe");
 const { formatDateInTimezone } = require("../utils/helpers");
 const logger = require("../utils/logger");
@@ -166,6 +167,8 @@ async function runPredictionPipeline(options = {}) {
 
   let insertedFree = 0;
   let insertedVip = 0;
+  let publishedFree = 0;
+  let publishedVip = 0;
   for (const pick of freePicks) {
     const key = buildMatchKey(pick);
     const fk = fixtureTierDedupeKey(pick);
@@ -176,6 +179,12 @@ async function runPredictionPipeline(options = {}) {
     insertedFree += 1;
     existingFreeKeys.add(key);
     existingFixtureFree.add(fk);
+    try {
+      const pub = await publishPickToProduction(pick, "free");
+      if (pub.published) publishedFree += 1;
+    } catch (error) {
+      logger.warn(`[publish] free ${pick.homeTeam?.name || ""}: ${error.message}`);
+    }
   }
   for (const pick of vipPicks) {
     const key = buildMatchKey(pick);
@@ -187,17 +196,26 @@ async function runPredictionPipeline(options = {}) {
     insertedVip += 1;
     existingVipKeys.add(key);
     existingFixtureVip.add(fk);
+    try {
+      const pub = await publishPickToProduction(pick, "vip");
+      if (pub.published) publishedVip += 1;
+    } catch (error) {
+      logger.warn(`[publish] vip ${pick.homeTeam?.name || ""}: ${error.message}`);
+    }
   }
 
   logger.info(
     `Pipeline (${sport}) día=${calendarDayIso} fixtures=${fixtures.length} prioritized=${prioritizedFixtures.length} ` +
     `uncovered_free=${uncoveredForFree.length} uncovered_vip=${uncoveredForVip.length} ai_target=${aiInputFixtures.length} ` +
     `scraped=${scraped.length} insertados free=+${insertedFree} vip=+${insertedVip} ` +
+    `planta free=+${publishedFree} vip=+${publishedVip} ` +
     `total_dia free=${existingFree.length + insertedFree} vip=${existingVip.length + insertedVip}`
   );
   return {
     free: insertedFree,
     vip: insertedVip,
+    published_free: publishedFree,
+    published_vip: publishedVip,
     sport,
     latam_only: latamOnly,
     fixtures_total: fixtures.length,

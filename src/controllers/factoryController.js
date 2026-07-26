@@ -4,6 +4,7 @@ const {
   setFactoryEnabled,
 } = require("../services/factoryService");
 const { listSources, syncDefaultSources } = require("../services/sourceService");
+const { publishQueueDayToProduction } = require("../services/productionPublishService");
 const { isWhatsAppReady } = require("../config/whatsapp");
 const { isAdminHttpRequest } = require("../utils/adminHttpAuth");
 
@@ -25,7 +26,7 @@ async function runNow(req, res, next) {
       return res.status(403).json({
         error: "forbidden",
         message:
-          "Se requiere sesión de administrador (JWT con role admin o usuario con pf_users.is_admin).",
+          "Se requiere administrador: FACTORY_ADMIN_EMAILS en el backend, o usuarios/{uid}.isAdmin=true en Firebase RTDB.",
       });
     }
     const raw =
@@ -61,6 +62,31 @@ async function setPower(req, res, next) {
   }
 }
 
+/** Copia cola free_picks/vip_picks del día a abet/abetvip (planta pública). */
+async function publishNow(req, res, next) {
+  try {
+    if (!(await isAdminHttpRequest(req))) {
+      return res.status(403).json({
+        error: "forbidden",
+        message:
+          "Se requiere administrador: FACTORY_ADMIN_EMAILS en el backend, o usuarios/{uid}.isAdmin=true en Firebase RTDB.",
+      });
+    }
+    const raw =
+      (req.body && req.body.match_date) ||
+      (typeof req.query?.match_date === "string" && req.query.match_date) ||
+      "";
+    const matchDate = String(raw).trim();
+    if (matchDate && !/^\d{4}-\d{2}-\d{2}$/.test(matchDate)) {
+      return res.status(400).json({ error: "bad_request", message: "match_date debe ser YYYY-MM-DD" });
+    }
+    const result = await publishQueueDayToProduction(matchDate || null);
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function getSources(req, res, next) {
   try {
     const rows = await listSources(300);
@@ -84,6 +110,7 @@ async function syncSources(req, res, next) {
 module.exports = {
   getStatus,
   runNow,
+  publishNow,
   setPower,
   getSources,
   syncSources,

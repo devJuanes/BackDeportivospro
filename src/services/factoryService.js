@@ -12,6 +12,7 @@ const {
   getPredictionSourcePolicy,
 } = require("./sourceService");
 const { getCurrentLiveSignals } = require("./liveSignalService");
+const { publishQueueDayToProduction } = require("./productionPublishService");
 
 const factoryState = {
   enabled: true,
@@ -79,14 +80,25 @@ async function runFactoryCycleNow(options = {}) {
       (acc, current) => {
         acc.free += current.free;
         acc.vip += current.vip;
+        acc.published_free += current.published_free || 0;
+        acc.published_vip += current.published_vip || 0;
         acc.by_sport.push(current);
         return acc;
       },
-      { free: 0, vip: 0, by_sport: [] }
+      { free: 0, vip: 0, published_free: 0, published_vip: 0, by_sport: [] }
     );
+
+    /** Sincroniza cola del día → abet/abetvip (cubre picks previos pendientes de planta). */
+    let plantSync = { free: 0, vip: 0 };
+    try {
+      plantSync = await publishQueueDayToProduction(matchDate);
+    } catch (error) {
+      logger.warn(`[publish] sync cola → planta: ${error.message}`);
+    }
 
     factoryState.last_run_result = {
       pipeline,
+      plant_sync: plantSync,
       ...(latamFootballOnly ? { latam_football_only: true } : {}),
       live_alerts_created: liveCount,
       news_stored: news.length,

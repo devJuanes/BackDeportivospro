@@ -11,6 +11,7 @@ const paymentsRoutes = require("./routes/paymentsRoutes");
 const blogRoutes = require("./routes/blogRoutes");
 const escaleraRoutes = require("./routes/escaleraRoutes");
 const notificationsRoutes = require("./routes/notificationsRoutes");
+const authTrialRoutes = require("./routes/authTrialRoutes");
 const { getSupportedSports } = require("./services/sportsService");
 const logger = require("./utils/logger");
 
@@ -22,8 +23,10 @@ const DEFAULT_MATUPICKS_ORIGINS = [
   "https://www.matupicks.app",
   "http://localhost:5173",
   "http://localhost:5174",
+  "http://localhost:5175",
   "http://127.0.0.1:5173",
   "http://127.0.0.1:5174",
+  "http://127.0.0.1:5175",
 ];
 
 /** Admin/Fábrica desde Vite en tu máquina contra API en producción (evita depender solo del .env del servidor). */
@@ -61,7 +64,14 @@ const corsOptions = {
     return callback(null, false);
   },
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "x-blog-cron-secret"],
+  allowedHeaders: [
+    "Content-Type",
+    "Authorization",
+    "X-Requested-With",
+    "x-blog-cron-secret",
+    "apikey",
+    "ApiKey",
+  ],
   optionsSuccessStatus: 204,
 };
 
@@ -87,6 +97,7 @@ app.use("/api/payments", paymentsRoutes);
 app.use("/api/blog", blogRoutes);
 app.use("/api/escalera", escaleraRoutes);
 app.use("/api/notifications", notificationsRoutes);
+app.use("/api/auth", authTrialRoutes);
 // Compatibilidad con clientes que usan prefijo por proyecto (MatuHttpClient Android).
 app.use("/api/projects/:projectId/escalera", escaleraRoutes);
 app.use("/api/projects/:projectId/notifications", notificationsRoutes);

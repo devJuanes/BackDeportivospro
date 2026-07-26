@@ -29,10 +29,11 @@ async function grantVipAfterApprovedPayment(userId, reference, wompiTransactionI
       : null;
   const tidSql = tid ? `'${tid}'` : "NULL";
 
+  // user_id puede ser UUID legado o Firebase UID (texto)
   const sql = `
 WITH ins AS (
   INSERT INTO wompi_vip_redemptions (reference, wompi_transaction_id, user_id)
-  SELECT '${refEsc}', ${tidSql}, '${uidEsc}'::uuid
+  SELECT '${refEsc}', ${tidSql}, '${uidEsc}'
   WHERE NOT EXISTS (SELECT 1 FROM wompi_vip_redemptions WHERE reference = '${refEsc}')
   RETURNING 1
 ),
@@ -47,7 +48,8 @@ upd AS (
       END
     ),
     updated_at = NOW()
-  WHERE id = '${uidEsc}'::uuid AND EXISTS (SELECT 1 FROM ins)
+  WHERE (id::text = '${uidEsc}' OR firebase_uid = '${uidEsc}')
+    AND EXISTS (SELECT 1 FROM ins)
   RETURNING vip_expires_at::text AS vip_expires_at
 )
 SELECT

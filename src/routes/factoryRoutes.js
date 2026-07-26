@@ -2,6 +2,7 @@ const express = require("express");
 const {
   getStatus,
   runNow,
+  publishNow,
   setPower,
   getSources,
   syncSources,
@@ -11,6 +12,7 @@ const router = express.Router();
 
 router.get("/status", getStatus);
 router.post("/run-now", runNow);
+router.post("/publish-now", publishNow);
 router.post("/power", setPower);
 router.get("/sources", getSources);
 router.post("/sources/sync-default", syncSources);
