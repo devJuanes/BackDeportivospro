@@ -2,6 +2,7 @@ const { db } = require("../config/database");
 const { callChatModel, isAiEnabled } = require("./aiForecastService");
 const { sendPushToTokens } = require("./firebasePushService");
 const model = require("../models/escaleraModel");
+const { formatDateInTimezone, normalizeMatchDate } = require("../utils/helpers");
 
 function toNum(v, fallback = 0) {
   const n = Number(v);
@@ -48,6 +49,14 @@ function isFreshLiveCandidate(row, now) {
   const minute = Number(row.minute);
   // Incluye prórroga (90+), pero descarta señales claramente fuera de rango.
   if (Number.isFinite(minute) && (minute < 0 || minute > 135)) return false;
+  const tz = process.env.FACTORY_TIMEZONE || "America/Bogota";
+  const today = formatDateInTimezone(now, tz);
+  const matchDate = row.match_date
+    ? normalizeMatchDate(row.match_date, tz)
+    : row.created_at
+      ? formatDateInTimezone(new Date(row.created_at), tz)
+      : null;
+  if (matchDate && matchDate !== today) return false;
   const createdAt = row.created_at ? new Date(String(row.created_at)) : null;
   if (!createdAt || Number.isNaN(createdAt.getTime())) return true;
   // Ventana más amplia para no perder live válidos cuando el proveedor retrasa updates.
@@ -138,7 +147,8 @@ async function pickCandidate({ excludeKeys = new Set(), excludeSignatures = new 
 
   const live = await db
     .from("abetlive")
-    .select("id,league,home_team_name,away_team_name,prediction,odds,confidence,minute,created_at,live_ended,state")
+    .select("id,league,home_team_name,away_team_name,prediction,odds,confidence,minute,created_at,live_ended,state,match_date")
+    .eq("state", "live")
     .order("created_at", { ascending: false })
     .limit(12);
   if (!live.error) {
@@ -147,12 +157,32 @@ async function pickCandidate({ excludeKeys = new Set(), excludeSignatures = new 
         normalize("abetlive", {
           ...r,
           source: "abetlive",
-          match_date: today,
+          match_date: r.match_date || today,
           match_hour: "",
           analysis: `Señal live minuto ${toNum(r.minute, 0)}.`,
         })
       )
     );
+  } else {
+    // Fallback si state/match_date aún no existen en BD.
+    const liveFb = await db
+      .from("abetlive")
+      .select("id,league,home_team_name,away_team_name,prediction,odds,confidence,minute,created_at")
+      .order("created_at", { ascending: false })
+      .limit(12);
+    if (!liveFb.error) {
+      bucket.push(
+        ...(liveFb.data || []).filter((r) => isFreshLiveCandidate(r, now)).map((r) =>
+          normalize("abetlive", {
+            ...r,
+            source: "abetlive",
+            match_date: today,
+            match_hour: "",
+            analysis: `Señal live minuto ${toNum(r.minute, 0)}.`,
+          })
+        )
+      );
+    }
   }
 
   const fixtures = await db

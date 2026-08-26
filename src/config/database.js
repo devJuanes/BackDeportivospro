@@ -3,6 +3,7 @@ const logger = require("../utils/logger");
 
 /**
  * Acepta MATUDB_* (correcto en backend) o VITE_MATUDB_* (si se copió el .env del front).
+ * Formato de key: ver src/docs/matudb.md → anon_xxxx
  */
 function envMatu(name) {
   const a = String(process.env[`MATUDB_${name}`] || "").trim();
@@ -14,6 +15,14 @@ function isJwt(value) {
   return /^eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(String(value || ""));
 }
 
+function isAnonKey(value) {
+  return /^anon_[A-Za-z0-9_]+/.test(String(value || ""));
+}
+
+function isLegacyMbKey(value) {
+  return /^mb_[A-Za-z0-9]+/.test(String(value || ""));
+}
+
 const matuUrl = envMatu("URL");
 const projectId = envMatu("PROJECT_ID");
 const apiKey = envMatu("API_KEY");
@@ -23,27 +32,31 @@ const useSupabase =
   process.env.VITE_MATUDB_USE_SUPABASE === "true";
 
 function projectBearer() {
+  // Solo JWT de sesión/auth en Authorization (como matuclient rpc).
+  // mb_ y anon_ van solo en header apikey — Bearer con mb_ causa "Invalid token".
   if (accessToken && isJwt(accessToken)) return accessToken;
   if (apiKey && isJwt(apiKey)) return apiKey;
   return "";
 }
 
+function hasApiKey() {
+  return Boolean(matuUrl && projectId && apiKey);
+}
+
 if (!matuUrl || !projectId || !apiKey) {
   logger.warn(
-    "Faltan variables MATUDB_URL / MATUDB_PROJECT_ID / MATUDB_API_KEY (también acepta VITE_MATUDB_*).",
+    "Faltan MATUDB_URL / MATUDB_PROJECT_ID / MATUDB_API_KEY. Ver src/docs/matudb.md",
   );
 } else if (process.env.VITE_MATUDB_URL && !process.env.MATUDB_URL) {
-  logger.warn(
-    "Usando VITE_MATUDB_* del .env. Preferible renombrar a MATUDB_* en el backend.",
-  );
-} else if (!projectBearer()) {
-  logger.warn(
-    "MatuDB API exige Authorization Bearer JWT. Pon ANON JWT KEY (eyJ…) en MATUDB_API_KEY o un JWT en MATUDB_ACCESS_TOKEN. Las keys mb_… dan Invalid token.",
-  );
+  logger.warn("Usando VITE_MATUDB_* — renombra a MATUDB_* en el backend.");
+} else if (isLegacyMbKey(apiKey)) {
+  logger.info("MATUDB_API_KEY mb_… — usando solo header apikey (sin Bearer).");
+} else if (!isAnonKey(apiKey) && !isJwt(apiKey) && !isLegacyMbKey(apiKey)) {
+  logger.warn("MATUDB_API_KEY con formato desconocido. Ver src/docs/matudb.md");
 }
 
 /**
- * matuclient ≤2.2.3 no manda Authorization. MatuDB ≥1.0.45 lo exige (JWT, no mb_…).
+ * matuclient manda apikey; MatuDB cloud también usa Authorization Bearer (anon_ o JWT).
  */
 const matuBase = String(matuUrl || "").replace(/\/$/, "");
 if (apiKey && typeof globalThis.fetch === "function") {
@@ -75,7 +88,12 @@ if (apiKey && typeof globalThis.fetch === "function") {
       headers.set("Authorization", `Bearer ${bearer}`);
     }
 
-    return nativeFetch(input, { ...init, headers });
+    const doFetch = () => nativeFetch(input, { ...init, headers });
+    return doFetch().catch((err) => {
+      const msg = String(err?.message || err || "");
+      if (!msg.toLowerCase().includes("fetch failed")) throw err;
+      return new Promise((r) => setTimeout(r, 400)).then(doFetch);
+    });
   };
 }
 
@@ -87,13 +105,8 @@ const db = createClient({
 });
 
 function ensureConfigured() {
-  if (!matuUrl || !projectId || !apiKey) {
-    throw new Error("Configura MATUDB_URL, MATUDB_PROJECT_ID y MATUDB_API_KEY");
-  }
-  if (!projectBearer()) {
-    throw new Error(
-      "MatuDB exige JWT en Authorization. Actualiza MATUDB_API_KEY con ANON JWT KEY (eyJ…) o define MATUDB_ACCESS_TOKEN",
-    );
+  if (!hasApiKey()) {
+    throw new Error("Configura MATUDB_URL, MATUDB_PROJECT_ID y MATUDB_API_KEY (ver src/docs/matudb.md)");
   }
 }
 
@@ -103,7 +116,7 @@ async function testConnection() {
   if (error) {
     throw new Error(error.message || "No se pudo conectar a MatuDB");
   }
-  logger.info(`MatuDB conectado correctamente.`);
+  logger.info("MatuDB conectado correctamente.");
   return true;
 }
 
@@ -116,4 +129,13 @@ async function executeRawSql(sql) {
   return data;
 }
 
-module.exports = { db, testConnection, executeRawSql, envMatu, projectBearer, isJwt };
+module.exports = {
+  db,
+  testConnection,
+  executeRawSql,
+  envMatu,
+  projectBearer,
+  isJwt,
+  isAnonKey,
+  isLegacyMbKey,
+};

@@ -39,9 +39,9 @@ async function listFreePredictions(req, res, next) {
       todayOnly: req.query.today === "true",
       sport: req.query.sport,
       date: req.query.date,
-      moderationStatus: req.query.moderation || "active",
     });
-    res.json(rows);
+    const { toPredictionJson, apiOk } = require("../utils/predictionDto");
+    res.json(apiOk(rows.map(toPredictionJson), { total: rows.length, tier: "free" }));
   } catch (error) {
     next(error);
   }

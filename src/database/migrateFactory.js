@@ -30,11 +30,12 @@ async function runFactoryMigrations() {
     "DELETE FROM news_articles WHERE id IN (SELECT id FROM (SELECT id, ROW_NUMBER() OVER (PARTITION BY slug ORDER BY published_at DESC) AS rn FROM news_articles WHERE slug IS NOT NULL AND slug <> '') t WHERE rn > 1);",
     "DELETE FROM free_picks WHERE id IN (SELECT id FROM (SELECT id, ROW_NUMBER() OVER (PARTITION BY match_date, team_a, team_b, pick_text ORDER BY created_at DESC) AS rn FROM free_picks) t WHERE rn > 1);",
     "DELETE FROM vip_picks WHERE id IN (SELECT id FROM (SELECT id, ROW_NUMBER() OVER (PARTITION BY match_date, team_a, team_b, pick_text ORDER BY created_at DESC) AS rn FROM vip_picks) t WHERE rn > 1);",
-    "ALTER TABLE pf_users ADD COLUMN IF NOT EXISTS vip_expires_at TIMESTAMPTZ;",
-    "ALTER TABLE pf_users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT FALSE;",
-    "ALTER TABLE pf_users ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMPTZ;",
-    "ALTER TABLE pf_users ADD COLUMN IF NOT EXISTS vip_trial_claimed_at TIMESTAMPTZ;",
-    "ALTER TABLE pf_users ADD COLUMN IF NOT EXISTS phone TEXT;",
+    "CREATE TABLE IF NOT EXISTS pf_users (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), name TEXT NOT NULL DEFAULT 'Usuario', email TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL DEFAULT '__matudb_auth__', is_vip BOOLEAN NOT NULL DEFAULT FALSE, vip_expires_at TIMESTAMPTZ, is_admin BOOLEAN NOT NULL DEFAULT FALSE, is_active BOOLEAN NOT NULL DEFAULT TRUE, email_verified_at TIMESTAMPTZ, vip_trial_claimed_at TIMESTAMPTZ, phone TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW());",
+    "ALTER TABLE IF EXISTS pf_users ADD COLUMN IF NOT EXISTS vip_expires_at TIMESTAMPTZ;",
+    "ALTER TABLE IF EXISTS pf_users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT FALSE;",
+    "ALTER TABLE IF EXISTS pf_users ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMPTZ;",
+    "ALTER TABLE IF EXISTS pf_users ADD COLUMN IF NOT EXISTS vip_trial_claimed_at TIMESTAMPTZ;",
+    "ALTER TABLE IF EXISTS pf_users ADD COLUMN IF NOT EXISTS phone TEXT;",
     "CREATE INDEX IF NOT EXISTS idx_pf_users_phone ON pf_users(phone);",
     "CREATE TABLE IF NOT EXISTS pf_email_otps (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), email TEXT NOT NULL, code_hash TEXT NOT NULL, expires_at TIMESTAMPTZ NOT NULL, attempts INT NOT NULL DEFAULT 0, consumed_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());",
     "CREATE INDEX IF NOT EXISTS idx_pf_email_otps_email_created ON pf_email_otps(email, created_at DESC);",
@@ -51,13 +52,34 @@ async function runFactoryMigrations() {
     "CREATE INDEX IF NOT EXISTS idx_news_matupicks_pick_kind ON news_articles(matupicks_pick_id, matupicks_blog_kind);",
     "CREATE TABLE IF NOT EXISTS sports_news (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), title TEXT, summary TEXT NOT NULL DEFAULT '', url TEXT NOT NULL DEFAULT '#', image TEXT NOT NULL DEFAULT '', source TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW());",
     "CREATE INDEX IF NOT EXISTS idx_sports_news_created_at ON sports_news(created_at DESC);",
+    "ALTER TABLE IF EXISTS abetlive ADD COLUMN IF NOT EXISTS state TEXT NOT NULL DEFAULT 'live';",
+    "ALTER TABLE IF EXISTS abetlive ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();",
+    "ALTER TABLE IF EXISTS abetlive ADD COLUMN IF NOT EXISTS ai_rationale TEXT;",
+    "ALTER TABLE IF EXISTS abetlive ADD COLUMN IF NOT EXISTS outcome TEXT;",
+    "ALTER TABLE IF EXISTS abetlive ADD COLUMN IF NOT EXISTS match_date DATE;",
+    "ALTER TABLE IF EXISTS abetlive ADD COLUMN IF NOT EXISTS live_ended BOOLEAN NOT NULL DEFAULT FALSE;",
+    "ALTER TABLE IF EXISTS abetlive ADD COLUMN IF NOT EXISTS home_goals INTEGER NOT NULL DEFAULT 0;",
+    "ALTER TABLE IF EXISTS abetlive ADD COLUMN IF NOT EXISTS away_goals INTEGER NOT NULL DEFAULT 0;",
+    "ALTER TABLE IF EXISTS abetlive ADD COLUMN IF NOT EXISTS prediction_id UUID;",
+    "CREATE INDEX IF NOT EXISTS idx_abetlive_match_date ON abetlive(match_date DESC);",
+    "CREATE INDEX IF NOT EXISTS idx_abetlive_state_date ON abetlive(state, match_date);",
+    "ALTER TABLE IF EXISTS dp_tracking_jobs ADD COLUMN IF NOT EXISTS abetlive_id UUID;",
+    "ALTER TABLE IF EXISTS dp_tracking_jobs ALTER COLUMN prediction_id DROP NOT NULL;",
+    "CREATE INDEX IF NOT EXISTS idx_dp_tracking_abetlive ON dp_tracking_jobs(abetlive_id);",
   ];
 
   for (const sql of statements) {
     try {
       await executeRawSql(sql);
     } catch (error) {
-      logger.warn(`Migración no aplicada (${sql}): ${error.message}`);
+      const msg = String(error.message || "");
+      const skip =
+        msg.includes("already exists") ||
+        msg.includes("duplicate") ||
+        msg.includes("does not exist");
+      if (!skip) {
+        logger.warn(`Migración no aplicada (${sql.slice(0, 80)}…): ${msg}`);
+      }
     }
   }
 }

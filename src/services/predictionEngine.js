@@ -1,5 +1,6 @@
 const { estimateOddsFromConfidence } = require("./oddsService");
 const { clamp } = require("../utils/helpers");
+const { resolveTeamLogoUrl } = require("./futboolLogoService");
 
 const MARKET_TEMPLATES = {
   football: {
@@ -92,12 +93,14 @@ function pickTemplateByFixture(fixture, tier) {
   return pool[index];
 }
 
-function parseTeams(matchText = "") {
+function parseTeams(matchText = "", league = "") {
   const normalized = String(matchText).replace(" vs ", " - ");
   const [home, away] = normalized.split(" - ").map((s) => s?.trim());
+  const homeName = home || "Equipo local";
+  const awayName = away || "Equipo visitante";
   return {
-    homeTeam: { name: home || "Equipo local", logo: "" },
-    awayTeam: { name: away || "Equipo visitante", logo: "" },
+    homeTeam: { name: homeName, logo: resolveTeamLogoUrl(homeName, league) },
+    awayTeam: { name: awayName, logo: resolveTeamLogoUrl(awayName, league) },
   };
 }
 
@@ -110,14 +113,15 @@ function parseConfidence(probability = "") {
 }
 
 function toPredictionRecord(scrapedRow, sport = "football") {
-  const teams = parseTeams(scrapedRow.match);
+  const league = scrapedRow.league || "Auto League";
+  const teams = parseTeams(scrapedRow.match, league);
   const confidence = parseConfidence(scrapedRow.probability);
   const date = scrapedRow.match_date || new Date().toISOString().slice(0, 10);
   const hours = scrapedRow.match_hour || "00:00";
 
   return {
     sport,
-    league: "Auto League",
+    league,
     ...teams,
     prediction: scrapedRow.prediction || "Doble oportunidad 1X",
     confidence,
@@ -160,9 +164,9 @@ function ensureVipPredictionDiff(basePrediction = "") {
 function buildRationale(row, tier = "free") {
   const source = row.source || "multi-fuente";
   if (tier === "vip") {
-    return `VIP: consenso + contexto de riesgo (${source}), mayor filtro de valor y disciplina de banca.`;
+    return `VIP: consenso + contexto de riesgo (${source}), mayor filtro de calidad en el tip.`;
   }
-  return `FREE: pick por consenso estadístico (${source}) para jornada actual.`;
+  return `FREE: tip informativo por consenso estadístico (${source}) para la jornada.`;
 }
 
 function splitFreeAndVipPredictions(
@@ -271,8 +275,14 @@ function buildPredictionFromFixture(fixture, tier = "free") {
   return {
     sport: fixture.sport,
     league: fixture.league,
-    homeTeam: { name: fixture.homeTeam, logo: "" },
-    awayTeam: { name: fixture.awayTeam, logo: "" },
+    homeTeam: {
+      name: fixture.homeTeam,
+      logo: resolveTeamLogoUrl(fixture.homeTeam, fixture.league),
+    },
+    awayTeam: {
+      name: fixture.awayTeam,
+      logo: resolveTeamLogoUrl(fixture.awayTeam, fixture.league),
+    },
     prediction: market.market,
     confidence,
     probability: clamp(confidence + (tier === "vip" ? 3 : 5), 50, 96),

@@ -135,11 +135,13 @@ async function runPredictionPipeline(options = {}) {
   const aiMatchLimit =
     sport === "football" && latamOnly
       ? Number.parseInt(process.env.FACTORY_LATAM_AI_MATCH_LIMIT || "40", 10)
-      : undefined;
-  const aiFromFixtures =
-    sport === "football"
-      ? await generateAiPredictionsFromFixtures(aiInputFixtures, { matchLimit: aiMatchLimit })
-      : { free: [], vip: [] };
+      : sport !== "football"
+        ? Number.parseInt(process.env.FACTORY_AI_MATCH_LIMIT_OTHER || process.env.FACTORY_AI_MATCH_LIMIT || "12", 10)
+        : undefined;
+  /** IA multi-deporte (Minimax agent): research → analysis → tip → cola + planta. */
+  const aiFromFixtures = await generateAiPredictionsFromFixtures(aiInputFixtures, {
+    matchLimit: aiMatchLimit,
+  });
   const fromScrapers = splitFreeAndVipPredictions(scrapedForFree, sport, { free: batchFree, vip: batchVip });
   const vipFromReliableScrapers = buildTierPredictionsFromScraped(
     scrapedForVip,

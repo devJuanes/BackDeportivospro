@@ -96,7 +96,10 @@ async function settleRowsForTable(table, config) {
   const { data: picks, error } = await db.from(table).select(selectCols).eq(statusField, pendingVal).limit(280);
 
   if (error) {
-    logger.warn(`Settlement lectura ${table}: ${error.message}`);
+    const msg = String(error.message || "");
+    if (!msg.includes("does not exist") && !msg.toLowerCase().includes("fetch failed")) {
+      logger.warn(`Settlement lectura ${table}: ${msg}`);
+    }
     return { updated: 0 };
   }
   if (!picks?.length) return { updated: 0 };
@@ -140,7 +143,7 @@ async function settleRowsForTable(table, config) {
 }
 
 /**
- * Una pasada de liquidación para free_picks, vip_picks, abet, abetvip.
+ * Una pasada de liquidación — solo dp_predictions (API DeportivosPro).
  */
 async function settlePendingPickResultsOnce() {
   if (String(process.env.FACTORY_AUTO_SETTLE_ENABLED || "true").toLowerCase() === "false") {
@@ -149,36 +152,12 @@ async function settlePendingPickResultsOnce() {
 
   const configs = [
     {
-      table: process.env.FACTORY_FREE_TABLE || "free_picks",
+      table: process.env.DP_PREDICTIONS_TABLE || "dp_predictions",
       statusField: "status",
-      homeField: "team_a",
-      awayField: "team_b",
-      pickField: "pick_text",
-      hasSport: true,
-    },
-    {
-      table: process.env.FACTORY_VIP_TABLE || "vip_picks",
-      statusField: "status",
-      homeField: "team_a",
-      awayField: "team_b",
-      pickField: "pick_text",
-      hasSport: true,
-    },
-    {
-      table: "abet",
-      statusField: "state",
-      homeField: "home_team_name",
-      awayField: "away_team_name",
+      homeField: "home_team",
+      awayField: "away_team",
       pickField: "prediction",
-      hasSport: false,
-    },
-    {
-      table: "abetvip",
-      statusField: "state",
-      homeField: "home_team_name",
-      awayField: "away_team_name",
-      pickField: "prediction",
-      hasSport: false,
+      hasSport: true,
     },
   ];
 
@@ -188,7 +167,10 @@ async function settlePendingPickResultsOnce() {
       const r = await settleRowsForTable(c.table, c);
       total += r.updated || 0;
     } catch (error) {
-      logger.warn(`Settlement tabla ${c.table}: ${error.message}`);
+      const msg = String(error.message || "");
+      if (!msg.includes("does not exist") && !msg.includes("fetch failed")) {
+        logger.warn(`Settlement tabla ${c.table}: ${msg}`);
+      }
     }
   }
 

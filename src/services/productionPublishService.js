@@ -8,12 +8,15 @@ const {
 const { getFreePredictions } = require("../models/predictionModel");
 const { getVipPredictions } = require("../models/vipModel");
 const { formatDateInTimezone } = require("../utils/helpers");
+const { scrubPlayStoreText } = require("../utils/playStoreSafe");
+const { enrichPickLogos } = require("./futboolLogoService");
 const logger = require("../utils/logger");
 
 const FREE_PROD = process.env.FACTORY_PROD_FREE_TABLE || "abet";
 const VIP_PROD = process.env.FACTORY_PROD_VIP_TABLE || "abetvip";
 
 function isAutoPublishEnabled() {
+  /** Default ON: fábrica → MatuDB plant (abet/abetvip) sin gate humano. Opt-out: FACTORY_AUTO_PUBLISH=false */
   return String(process.env.FACTORY_AUTO_PUBLISH || "true").toLowerCase() !== "false";
 }
 
@@ -25,13 +28,17 @@ function todayIsoDate() {
 }
 
 function mapPickToProductionRow(pick) {
+  enrichPickLogos(pick);
+
   const home =
     pick.homeTeam?.name || pick.home_team_name || pick.team_a || "";
   const away =
     pick.awayTeam?.name || pick.away_team_name || pick.team_b || "";
   const matchDate = String(pick.date || pick.match_date || "").slice(0, 10);
   const matchHour = normalizeMatchHour(pick.hours || pick.match_hour);
-  const prediction = String(pick.prediction || pick.pick_text || "").trim();
+  const prediction = scrubPlayStoreText(
+    String(pick.prediction || pick.pick_text || "").trim()
+  );
   const homeLogo = pick.homeTeam?.logo || pick.home_team_logo || "";
   const awayLogo = pick.awayTeam?.logo || pick.away_team_logo || "";
   const stateRaw = String(pick.state || pick.status || "pending").toLowerCase();

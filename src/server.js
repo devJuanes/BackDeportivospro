@@ -2,21 +2,19 @@ require("dotenv").config();
 
 const app = require("./app");
 const logger = require("./utils/logger");
-const { testConnection } = require("./config/database");
+const { bootstrapDatabase, bootstrapFactoryInBackground } = require("./database/bootstrap");
 const { startCronJobs } = require("./jobs/cronJobs");
 const { initWhatsApp } = require("./config/whatsapp");
-const { runFactoryMigrations } = require("./database/migrateFactory");
-const { syncDefaultSources } = require("./services/sourceService");
 
 const port = Number.parseInt(process.env.PORT, 10) || 3000;
 
 async function bootstrap() {
   try {
-    await testConnection();
-    await runFactoryMigrations();
-    await syncDefaultSources();
+    await bootstrapDatabase();
   } catch (error) {
-    logger.warn(`No se pudo validar DB al iniciar: ${error.message}`);
+    logger.error(`Bootstrap DB falló: ${error.message}`);
+    logger.error("Revisa MATUDB_URL, MATUDB_PROJECT_ID y MATUDB_API_KEY en .env");
+    process.exit(1);
   }
 
   initWhatsApp();
@@ -24,6 +22,7 @@ async function bootstrap() {
 
   app.listen(port, () => {
     logger.info(`Servidor ejecutándose en puerto ${port}`);
+    bootstrapFactoryInBackground();
   });
 }
 
