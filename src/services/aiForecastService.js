@@ -11,6 +11,10 @@ const {
   SPORT_MARKET_HINTS,
 } = require("./predictionAgentService");
 const { resolveTeamLogoUrl } = require("./futboolLogoService");
+const {
+  filterFixturesForTips,
+  passesQualityGate,
+} = require("../utils/fixtureQuality");
 
 function isAiEnabled() {
   if (process.env.FACTORY_AI_ENABLED !== "true") return false;
@@ -98,11 +102,12 @@ function buildPrompt(fixture) {
   const marketHints = SPORT_MARKET_HINTS[sport] || SPORT_MARKET_HINTS.football;
   return [
     "Eres analista senior de MatuPicks. Responde SOLO JSON válido sin markdown.",
-    `Genera ${marketsPerMatch} tip(s)/pronóstico(s) informativos FREE y ${marketsPerMatch} VIP.`,
-    "Cada tip con análisis claro (forma, H2H, motivación, lesiones si aplica, lectura de cuota implícita).",
+    `Genera hasta ${marketsPerMatch} tip(s) FREE y hasta ${marketsPerMatch} VIP (calidad > cantidad).`,
+    "Si no hay edge claro, free/vip = []. No inventes tips genéricos.",
+    "Cada tip con análisis concreto (estilo, ritmo, motivación, riesgos).",
     `Mercados: ${marketHints}`,
     "NO uses Draw No Bet ni DNB. Lenguaje Play Store safe (tips/consejos; nunca CTAs de apuestas).",
-    "Asigna confidence realista (free 58-78, vip 72-92). Los VIP con mayor edge.",
+    "Confidence realista (free 62-78, vip 74-90). VIP distinto y con más edge que FREE.",
     "",
     `Partido: ${fixture.homeTeam} vs ${fixture.awayTeam}`,
     `Liga: ${fixture.league}`,
@@ -116,10 +121,10 @@ function buildPrompt(fixture) {
 }
 
 function toPredictionRecord(fixture, tier, aiData, index = 0) {
-  const confidenceBase = tier === "vip" ? 72 : 62;
+  const confidenceBase = tier === "vip" ? 74 : 64;
   const confidence = clamp(
     Number.isFinite(aiData?.confidence) ? Number(aiData.confidence) : confidenceBase,
-    tier === "vip" ? 65 : 55,
+    tier === "vip" ? 70 : 60,
     tier === "vip" ? 93 : 82
   );
   const homeName = fixture?.homeTeam || "local";
@@ -308,7 +313,7 @@ async function generateAiPredictionsFromFixtures(fixtures = [], opts = {}) {
     typeof override === "number" && Number.isFinite(override)
       ? Math.max(1, Math.floor(override))
       : Math.max(1, envLimit);
-  const selected = fixtures.slice(0, limit);
+  const selected = filterFixturesForTips(fixtures, { allowLive: false }).slice(0, limit);
   const marketsPerMatch = Number.parseInt(process.env.FACTORY_MARKETS_PER_MATCH || "1", 10);
   const gapMs = Number.parseInt(process.env.FACTORY_AI_DELAY_MS || "2500", 10);
   const free = [];
@@ -320,10 +325,12 @@ async function generateAiPredictionsFromFixtures(fixtures = [], opts = {}) {
       const freeRows = Array.isArray(aiJson?.free) ? aiJson.free : aiJson?.free ? [aiJson.free] : [];
       const vipRows = Array.isArray(aiJson?.vip) ? aiJson.vip : aiJson?.vip ? [aiJson.vip] : [];
       freeRows.slice(0, Math.max(1, marketsPerMatch)).forEach((row, idx) => {
-        free.push(toPredictionRecord(fixture, "free", row, idx));
+        const rec = toPredictionRecord(fixture, "free", row, idx);
+        if (passesQualityGate(rec, "free")) free.push(rec);
       });
       vipRows.slice(0, Math.max(1, marketsPerMatch)).forEach((row, idx) => {
-        vip.push(toPredictionRecord(fixture, "vip", row, idx));
+        const rec = toPredictionRecord(fixture, "vip", row, idx);
+        if (passesQualityGate(rec, "vip")) vip.push(rec);
       });
     } catch (error) {
       logger.warn(`IA falló para ${fixture.homeTeam} vs ${fixture.awayTeam}: ${error.message}`);

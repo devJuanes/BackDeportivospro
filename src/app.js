@@ -23,6 +23,8 @@ const app = express();
 const DEFAULT_MATUPICKS_ORIGINS = [
   "https://matupicks.app",
   "https://www.matupicks.app",
+  "https://picks.logsfm.com",
+  "http://picks.logsfm.com",
   "http://localhost:5173",
   "http://localhost:5174",
   "http://localhost:5175",

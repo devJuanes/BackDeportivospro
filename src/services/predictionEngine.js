@@ -5,72 +5,72 @@ const { resolveTeamLogoUrl } = require("./futboolLogoService");
 const MARKET_TEMPLATES = {
   football: {
     free: [
-      { market: "Más de 1.5 goles", baseConfidence: 62, rationale: "Tendencia conservadora para jornada activa." },
-      { market: "Ambos equipos marcan: SI", baseConfidence: 60, rationale: "Cruce con perfiles ofensivos equilibrados." },
-      { market: "Doble oportunidad 1X", baseConfidence: 64, rationale: "Cobertura de riesgo sobre localía." },
-      { market: "Menos de 3.5 goles", baseConfidence: 61, rationale: "Perfil de partido más táctico." },
-      { market: "Más de 2.5 goles", baseConfidence: 58, rationale: "Partido con potencial de intercambio." },
+      { market: "Más de 1.5 goles", baseConfidence: 64, rationale: "Tendencia conservadora para jornada activa." },
+      { market: "Ambos equipos marcan: SI", baseConfidence: 62, rationale: "Cruce con perfiles ofensivos equilibrados." },
+      { market: "Doble oportunidad 1X", baseConfidence: 65, rationale: "Cobertura de riesgo sobre localía." },
+      { market: "Menos de 3.5 goles", baseConfidence: 63, rationale: "Perfil de partido más táctico." },
+      { market: "Más de 2.5 goles", baseConfidence: 61, rationale: "Partido con potencial de intercambio." },
     ],
     vip: [
-      { market: "Hándicap asiático local -0.25", baseConfidence: 73, rationale: "Ventaja local con gestión de empate parcial." },
-      { market: "Ambos equipos marcan + Más de 2.5", baseConfidence: 71, rationale: "Escenario de alta producción ofensiva." },
-      { market: "Total córners: Más de 8.5", baseConfidence: 69, rationale: "Ritmo alto y amplitud por bandas." },
-      { market: "Tarjetas: Más de 3.5", baseConfidence: 70, rationale: "Contexto competitivo y fricción esperada." },
-      { market: "Victoria local — mercado 1X2", baseConfidence: 72, rationale: "Selección principal con valor sobre la cuota implícita." },
+      { market: "Hándicap asiático local -0.25", baseConfidence: 74, rationale: "Ventaja local con gestión de empate parcial." },
+      { market: "Ambos equipos marcan + Más de 2.5", baseConfidence: 72, rationale: "Escenario de alta producción ofensiva." },
+      { market: "Total córners: Más de 8.5", baseConfidence: 71, rationale: "Ritmo alto y amplitud por bandas." },
+      { market: "Tarjetas: Más de 3.5", baseConfidence: 71, rationale: "Contexto competitivo y fricción esperada." },
+      { market: "Victoria local — mercado 1X2", baseConfidence: 73, rationale: "Selección principal con valor sobre la cuota implícita." },
     ],
   },
   basketball: {
     free: [
-      { market: "Más de 159.5 puntos", baseConfidence: 61, rationale: "Ritmo medio-alto esperado." },
-      { market: "Local +4.5 handicap", baseConfidence: 60, rationale: "Cobertura contra cierre apretado." },
-      { market: "Visitante +5.5 handicap", baseConfidence: 59, rationale: "Valor por spread amplio." },
+      { market: "Más de 159.5 puntos", baseConfidence: 63, rationale: "Ritmo medio-alto esperado." },
+      { market: "Local +4.5 handicap", baseConfidence: 62, rationale: "Cobertura contra cierre apretado." },
+      { market: "Visitante +5.5 handicap", baseConfidence: 61, rationale: "Valor por spread amplio." },
     ],
     vip: [
-      { market: "Más de 169.5 puntos", baseConfidence: 71, rationale: "Proyección ofensiva superior a media." },
-      { market: "1Q más de 41.5 puntos", baseConfidence: 69, rationale: "Inicio con pace alto." },
-      { market: "Local -2.5 handicap", baseConfidence: 72, rationale: "Cierre favorable por eficiencia local." },
+      { market: "Más de 169.5 puntos", baseConfidence: 72, rationale: "Proyección ofensiva superior a media." },
+      { market: "1Q más de 41.5 puntos", baseConfidence: 71, rationale: "Inicio con pace alto." },
+      { market: "Local -2.5 handicap", baseConfidence: 73, rationale: "Cierre favorable por eficiencia local." },
     ],
   },
   baseball: {
     free: [
-      { market: "Más de 6.5 carreras", baseConfidence: 60, rationale: "Bullpen con riesgo de concesión." },
-      { market: "Menos de 9.5 carreras", baseConfidence: 59, rationale: "Duelo con control de pitcheo." },
-      { market: "Run line +1.5 visitante", baseConfidence: 61, rationale: "Juego proyectado cerrado." },
+      { market: "Más de 6.5 carreras", baseConfidence: 62, rationale: "Bullpen con riesgo de concesión." },
+      { market: "Menos de 9.5 carreras", baseConfidence: 61, rationale: "Duelo con control de pitcheo." },
+      { market: "Run line +1.5 visitante", baseConfidence: 63, rationale: "Juego proyectado cerrado." },
     ],
     vip: [
-      { market: "Run line -1.5 local", baseConfidence: 72, rationale: "Ventaja clara en abridor y lineup." },
-      { market: "Más de 7.5 carreras", baseConfidence: 70, rationale: "Contexto favorable al bateo." },
-      { market: "Primeras 5 entradas: local gana", baseConfidence: 71, rationale: "Edge temprano del abridor local." },
+      { market: "Run line -1.5 local", baseConfidence: 73, rationale: "Ventaja clara en abridor y lineup." },
+      { market: "Más de 7.5 carreras", baseConfidence: 71, rationale: "Contexto favorable al bateo." },
+      { market: "Primeras 5 entradas: local gana", baseConfidence: 72, rationale: "Edge temprano del abridor local." },
     ],
   },
   tennis: {
     free: [
-      { market: "Más de 20.5 games", baseConfidence: 60, rationale: "Emparejamiento equilibrado de servicio." },
-      { market: "Ganador del partido: favorito", baseConfidence: 62, rationale: "Jerarquía y forma reciente." },
+      { market: "Más de 20.5 games", baseConfidence: 62, rationale: "Emparejamiento equilibrado de servicio." },
+      { market: "Ganador del partido: favorito", baseConfidence: 64, rationale: "Jerarquía y forma reciente." },
     ],
     vip: [
-      { market: "Ganador 2-0 sets", baseConfidence: 71, rationale: "Superioridad técnica marcada." },
-      { market: "Hándicap games -2.5 favorito", baseConfidence: 70, rationale: "Dominio sostenido por consistencia." },
+      { market: "Ganador 2-0 sets", baseConfidence: 72, rationale: "Superioridad técnica marcada." },
+      { market: "Hándicap games -2.5 favorito", baseConfidence: 71, rationale: "Dominio sostenido por consistencia." },
     ],
   },
   mma: {
     free: [
-      { market: "Más de 1.5 rounds", baseConfidence: 59, rationale: "Combate con perfil táctico inicial." },
-      { market: "La pelea llega a decisión: NO", baseConfidence: 60, rationale: "Estilo de finalización elevado." },
+      { market: "Más de 1.5 rounds", baseConfidence: 61, rationale: "Combate con perfil táctico inicial." },
+      { market: "La pelea llega a decisión: NO", baseConfidence: 62, rationale: "Estilo de finalización elevado." },
     ],
     vip: [
-      { market: "Método de victoria: KO/TKO", baseConfidence: 71, rationale: "Matchup favorable de striking." },
-      { market: "Victoria del favorito", baseConfidence: 73, rationale: "Ventaja integral en estadísticas clave." },
+      { market: "Método de victoria: KO/TKO", baseConfidence: 72, rationale: "Matchup favorable de striking." },
+      { market: "Victoria del favorito", baseConfidence: 74, rationale: "Ventaja integral en estadísticas clave." },
     ],
   },
   hockey: {
     free: [
-      { market: "Más de 4.5 goles", baseConfidence: 60, rationale: "Ritmo y volumen de tiros consistentes." },
-      { market: "Doble oportunidad local", baseConfidence: 61, rationale: "Factor local en matchups cerrados." },
+      { market: "Más de 4.5 goles", baseConfidence: 62, rationale: "Ritmo y volumen de tiros consistentes." },
+      { market: "Doble oportunidad local", baseConfidence: 63, rationale: "Factor local en matchups cerrados." },
     ],
     vip: [
-      { market: "Más de 5.5 goles", baseConfidence: 70, rationale: "Alta varianza ofensiva proyectada." },
-      { market: "Hándicap local -1.5", baseConfidence: 72, rationale: "Ventaja diferencial en transición." },
+      { market: "Más de 5.5 goles", baseConfidence: 71, rationale: "Alta varianza ofensiva proyectada." },
+      { market: "Hándicap local -1.5", baseConfidence: 73, rationale: "Ventaja diferencial en transición." },
     ],
   },
 };
@@ -262,7 +262,7 @@ function buildPredictionFromFixture(fixture, tier = "free") {
   const variation = (hashString(fixture.eventId || `${fixture.homeTeam}-${fixture.awayTeam}`) % 7) - 3;
   const confidence = clamp(
     market.baseConfidence + bias * 2 + variation,
-    tier === "vip" ? 67 : 54,
+    tier === "vip" ? 70 : 60,
     tier === "vip" ? 91 : 79
   );
   const oddsShift = tier === "vip" ? -0.06 : 0.08;

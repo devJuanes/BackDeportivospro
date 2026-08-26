@@ -12,6 +12,7 @@ const { getPredictionSourcePolicy, toHost } = require("../services/sourceService
 const { generateAiPredictionsFromFixtures } = require("../services/aiForecastService");
 const { publishPickToProduction } = require("../services/productionPublishService");
 const { mergeDedupeByKey, normalizePickLabel, fixtureTierDedupeKey, normalizeTeamToken, pairKey } = require("../utils/predictionDedupe");
+const { filterFixturesForTips, filterQualityPicks } = require("../utils/fixtureQuality");
 const { formatDateInTimezone } = require("../utils/helpers");
 const logger = require("../utils/logger");
 
@@ -53,17 +54,20 @@ async function runPredictionPipeline(options = {}) {
   } catch (error) {
     logger.warn(`No se pudieron leer fixtures ${sport}: ${error.message}`);
   }
+  const beforeFilter = fixtures.length;
+  fixtures = filterFixturesForTips(fixtures, { allowLive: false });
+  if (beforeFilter !== fixtures.length) {
+    logger.info(
+      `Fixtures ${sport}: ${beforeFilter} → ${fixtures.length} (próximos reales, sin basura)`
+    );
+  }
   const rotationPool = Number.parseInt(process.env.FACTORY_FIXTURE_ROTATION_POOL || "80", 10);
   const rotationWindowMin = Number.parseInt(process.env.FACTORY_FIXTURE_ROTATION_WINDOW_MIN || "15", 10);
   const rotationSeed = Math.floor(Date.now() / (Math.max(1, rotationWindowMin) * 60 * 1000));
   /** Orden real por liga/importancia (sin barajar): la IA debe verse primero en estos partidos. */
-  const fixturesByPriority =
-    sport === "football" ? prioritizeFixtures(fixtures, calendarDayIso) : fixtures;
+  const fixturesByPriority = prioritizeFixtures(fixtures, calendarDayIso);
   /** Lista barajada solo para ampliar cobertura en motor/scrapers; no debe “esconder” los top a la IA. */
-  const prioritizedFixtures =
-    sport === "football"
-      ? diversifyFixtures(fixturesByPriority, rotationPool, rotationSeed)
-      : fixtures;
+  const prioritizedFixtures = diversifyFixtures(fixturesByPriority, rotationPool, rotationSeed);
 
   const batchFree = Number.parseInt(
     latamOnly ? process.env.FACTORY_LATAM_BATCH_FREE || "45" : process.env.FACTORY_BATCH_FREE || "60",
@@ -151,20 +155,26 @@ async function runPredictionPipeline(options = {}) {
   );
 
   /** IA → scrapers → motor fixtures; sin repetir mercado; luego un solo pick por partido/día y tier. */
-  const freePicks = mergeDedupeByKey(
-    [
-      mergeDedupeByKey([aiFromFixtures.free, fromScrapers.free, fromFixtures.free], buildMatchKey),
-    ],
-    fixtureTierDedupeKey
+  const freePicks = filterQualityPicks(
+    mergeDedupeByKey(
+      [
+        mergeDedupeByKey([aiFromFixtures.free, fromScrapers.free, fromFixtures.free], buildMatchKey),
+      ],
+      fixtureTierDedupeKey
+    ),
+    "free"
   );
-  const vipPicks = mergeDedupeByKey(
-    [
-      mergeDedupeByKey(
-        [aiFromFixtures.vip, vipFromReliableScrapers, fromFixtures.vip, fromScrapers.vip],
-        buildMatchKey
-      ),
-    ],
-    fixtureTierDedupeKey
+  const vipPicks = filterQualityPicks(
+    mergeDedupeByKey(
+      [
+        mergeDedupeByKey(
+          [aiFromFixtures.vip, vipFromReliableScrapers, fromFixtures.vip, fromScrapers.vip],
+          buildMatchKey
+        ),
+      ],
+      fixtureTierDedupeKey
+    ),
+    "vip"
   );
 
   let insertedFree = 0;

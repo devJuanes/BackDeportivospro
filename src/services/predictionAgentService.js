@@ -10,6 +10,10 @@ const { buildPredictionSeo } = require("../utils/predictionSeo");
 const { scrubPlayStoreText, playStoreSystemGuard } = require("../utils/playStoreSafe");
 const { mergeDedupeByKey, normalizePickLabel } = require("../utils/predictionDedupe");
 const { resolveTeamLogoUrl } = require("./futboolLogoService");
+const {
+  filterFixturesForTips,
+  passesQualityGate,
+} = require("../utils/fixtureQuality");
 
 const SPORT_MARKET_HINTS = {
   football:
@@ -56,9 +60,10 @@ function buildResearchBrief(fixture) {
     event_id: fixture.eventId || null,
     market_hints: SPORT_MARKET_HINTS[sport] || SPORT_MARKET_HINTS.football,
     notes: [
-      "Prioriza valor informativo y coherencia táctica/estilo.",
-      "Si faltan datos de forma/H2H, sé conservador en confidence.",
-      "Free = tip accesible; VIP = tip con más edge y análisis más profundo.",
+      "Calidad > cantidad: un tip sólido vale más que varios genéricos.",
+      "Si faltan datos de forma/H2H, baja confidence o omite el tip (arrays vacíos).",
+      "Free = tip accesible y claro; VIP = edge más fino, no el mismo tip reformulado.",
+      "Evita mercados basura (TBD, N/A, empate anulado, tips sin línea concreta).",
     ],
   };
 }
@@ -67,11 +72,13 @@ function buildAgentPrompt(brief, marketsPerMatch) {
   return [
     "Pipeline MatuPicks (multi-step en una sola respuesta JSON):",
     "1) research_summary: 1-2 frases con contexto liga/equipos/horario.",
-    "2) analysis: 3-5 frases (forma ilustrativa, estilo, motivaciones, riesgos).",
-    `3) free: ${marketsPerMatch} tip(s) FREE; vip: ${marketsPerMatch} tip(s) VIP.`,
+    "2) analysis: 3-5 frases (estilo de juego, ritmo, motivaciones, riesgos reales).",
+    `3) free: hasta ${marketsPerMatch} tip(s) FREE; vip: hasta ${marketsPerMatch} tip(s) VIP.`,
+    "Si no ves edge claro, devuelve free/vip como [] — NO inventes tips flojos.",
     `Mercados sugeridos (${brief.sport}): ${brief.market_hints}`,
-    "Confidence: free 58-78, vip 72-92. Sin Draw No Bet.",
-    "Campos pick = tip corto en español; analysis por pick opcional.",
+    "Confidence REALISTA: free 62-78, vip 74-90. Solo sube si el razonamiento lo sostiene.",
+    "pick = tip corto concreto en español (línea/mercado claro); analysis por pick 1-2 frases.",
+    "Lenguaje tips/consejos (Play Store safe). Sin Draw No Bet / DNB.",
     "",
     `Partido: ${brief.home} vs ${brief.away}`,
     `Liga: ${brief.league}`,
@@ -107,10 +114,10 @@ function sanitizePick(pick, tier, fixture) {
 }
 
 function toPredictionRecord(fixture, tier, aiData, index, sharedAnalysis) {
-  const confidenceBase = tier === "vip" ? 72 : 62;
+  const confidenceBase = tier === "vip" ? 74 : 64;
   const confidence = clamp(
     Number.isFinite(aiData?.confidence) ? Number(aiData.confidence) : confidenceBase,
-    tier === "vip" ? 65 : 55,
+    tier === "vip" ? 70 : 60,
     tier === "vip" ? 93 : 82
   );
   const pick = sanitizePick(aiData?.pick || "", tier, fixture);
@@ -170,7 +177,13 @@ async function runAgentPickPipeline(fixtures = [], callChatModel, opts = {}) {
     typeof override === "number" && Number.isFinite(override)
       ? Math.max(1, Math.floor(override))
       : Math.max(1, envLimit);
-  const selected = fixtures.slice(0, limit);
+  const usable = filterFixturesForTips(fixtures, { allowLive: false });
+  const selected = usable.slice(0, limit);
+  if (usable.length < (fixtures || []).length) {
+    logger.info(
+      `[agent] fixtures filtrados: ${fixtures.length} → ${usable.length} (solo próximos reales)`
+    );
+  }
   const free = [];
   const vip = [];
   const system = playStoreSystemGuard();
@@ -193,15 +206,30 @@ async function runAgentPickPipeline(fixtures = [], callChatModel, opts = {}) {
         : aiJson?.vip
           ? [aiJson.vip]
           : [];
+      let added = 0;
       freeRows.slice(0, Math.max(1, marketsPerMatch)).forEach((row, idx) => {
-        free.push(toPredictionRecord(fixture, "free", row, idx, shared));
+        const rec = toPredictionRecord(fixture, "free", row, idx, shared);
+        if (passesQualityGate(rec, "free")) {
+          free.push(rec);
+          added += 1;
+        }
       });
       vipRows.slice(0, Math.max(1, marketsPerMatch)).forEach((row, idx) => {
-        vip.push(toPredictionRecord(fixture, "vip", row, idx, shared));
+        const rec = toPredictionRecord(fixture, "vip", row, idx, shared);
+        if (passesQualityGate(rec, "vip")) {
+          vip.push(rec);
+          added += 1;
+        }
       });
-      logger.info(
-        `[agent] tip listo ${brief.sport}: ${brief.home} vs ${brief.away}`
-      );
+      if (added > 0) {
+        logger.info(
+          `[agent] tip listo ${brief.sport}: ${brief.home} vs ${brief.away} (+${added})`
+        );
+      } else {
+        logger.info(
+          `[agent] sin tip de calidad ${brief.sport}: ${brief.home} vs ${brief.away}`
+        );
+      }
     } catch (error) {
       logger.warn(
         `[agent] falló ${fixture.homeTeam} vs ${fixture.awayTeam}: ${error.message}`

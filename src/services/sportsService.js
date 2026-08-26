@@ -29,6 +29,12 @@ const ESPN_PATH_BY_SPORT = {
   esports: "esports/league-of-legends",
 };
 
+/** Extra scoreboards for multi-sport coverage (merged after primary path). */
+const ESPN_EXTRA_PATHS_BY_SPORT = {
+  basketball: ["basketball/wnba", "basketball/mens-college-basketball"],
+  tennis: ["tennis/atp", "tennis/wta"],
+};
+
 function getSupportedSports() {
   return SUPPORTED_SPORTS;
 }
@@ -127,7 +133,28 @@ async function fetchEspnScoreboardRaw(sport = "football", dateIso = null) {
   const dateCompact = isoDateToCompact(effectiveDateIso);
   const url = `https://site.api.espn.com/apis/site/v2/sports/${path}/scoreboard?dates=${dateCompact}`;
   const data = await fetchEspnJson(url, 15000);
-  return data?.events || [];
+  const primary = Array.isArray(data?.events) ? data.events : [];
+  const extras = ESPN_EXTRA_PATHS_BY_SPORT[sport] || [];
+  if (extras.length === 0) return primary;
+
+  const seen = new Set(primary.map((e) => String(e?.id || "")));
+  const merged = [...primary];
+  for (const extraPath of extras) {
+    try {
+      const extraUrl = `https://site.api.espn.com/apis/site/v2/sports/${extraPath}/scoreboard?dates=${dateCompact}`;
+      const extraData = await fetchEspnJson(extraUrl, 12000);
+      for (const event of extraData?.events || []) {
+        const id = String(event?.id || "");
+        if (id && seen.has(id)) continue;
+        if (id) seen.add(id);
+        merged.push(event);
+      }
+      await new Promise((r) => setTimeout(r, 100));
+    } catch (error) {
+      logger.warn(`ESPN extra (${extraPath}): ${error.message || String(error)}`);
+    }
+  }
+  return merged;
 }
 
 function normalizeMinuteBySport(statusShort = "", sport = "football") {
