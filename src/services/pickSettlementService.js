@@ -287,7 +287,31 @@ async function settleRowsForTable(table, config) {
       return;
     }
     scored += 1;
-    if (patch[statusField] && patch[statusField] !== prevState) updated += 1;
+    if (patch[statusField] && patch[statusField] !== prevState) {
+      updated += 1;
+      if (
+        (patch[statusField] === "won" || patch[statusField] === "lost") &&
+        prevState !== "won" &&
+        prevState !== "lost"
+      ) {
+        try {
+          const { notifyFollowedSettled } = require("./predictionNotifyService");
+          await notifyFollowedSettled(
+            {
+              id: pick.id,
+              home_team_name: pick[homeField],
+              away_team_name: pick[awayField],
+              prediction: pick[pickField],
+              home_goals: patch.home_goals ?? pick.home_goals,
+              away_goals: patch.away_goals ?? pick.away_goals,
+            },
+            patch[statusField]
+          );
+        } catch {
+          /* push opcional */
+        }
+      }
+    }
   }
 
   // Sin fecha: solo self-score.

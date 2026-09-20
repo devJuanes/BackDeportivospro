@@ -183,8 +183,22 @@ async function runFactoryMigrations() {
       notif_free BOOLEAN NOT NULL DEFAULT TRUE,
       notif_vip BOOLEAN NOT NULL DEFAULT TRUE,
       notif_news BOOLEAN NOT NULL DEFAULT FALSE,
+      notif_followed BOOLEAN NOT NULL DEFAULT TRUE,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );`,
+    "ALTER TABLE IF EXISTS pf_notification_prefs ADD COLUMN IF NOT EXISTS notif_followed BOOLEAN NOT NULL DEFAULT TRUE;",
+    "ALTER TABLE IF EXISTS pf_users ADD COLUMN IF NOT EXISTS fcm_token TEXT;",
+    `CREATE TABLE IF NOT EXISTS notification_tokens (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL,
+      app_id TEXT NOT NULL DEFAULT 'matupicks',
+      token TEXT NOT NULL,
+      device_info JSONB,
+      last_used_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(user_id, app_id, token)
+    );`,
+    "CREATE INDEX IF NOT EXISTS idx_notification_tokens_user ON notification_tokens (user_id);",
     `CREATE TABLE IF NOT EXISTS app_banners (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       title TEXT NOT NULL DEFAULT '',

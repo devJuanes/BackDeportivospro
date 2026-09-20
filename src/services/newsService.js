@@ -41,10 +41,21 @@ async function collectAndStoreSportsNews() {
     logger.warn(`[news-ai] ${error.message}`);
   }
 
+  const allNew = [...stored, ...feed, ...aiFeed];
+  // Push noticias (máx. 2 por ciclo para no spamear)
+  try {
+    const { notifyNewsItem } = require("./predictionNotifyService");
+    for (const item of allNew.slice(0, 2)) {
+      await notifyNewsItem(item);
+    }
+  } catch (error) {
+    logger.warn(`[news-push] ${error.message}`);
+  }
+
   logger.info(
     `Noticias propias: editorial=${stored.length}, feed=${feed.length}, ia=${aiFeed.length}`
   );
-  return [...stored, ...feed, ...aiFeed];
+  return allNew;
 }
 
 module.exports = {
