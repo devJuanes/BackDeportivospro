@@ -9,6 +9,11 @@ const { getFreePredictions } = require("../models/predictionModel");
 const { getVipPredictions } = require("../models/vipModel");
 const { formatDateInTimezone } = require("../utils/helpers");
 const { scrubPlayStoreText } = require("../utils/playStoreSafe");
+const {
+  getDailyCap,
+  getMaxPicksPerMatch,
+  shouldAcceptPickForFixture,
+} = require("../utils/pickVolume");
 const { enrichPickLogos } = require("./futboolLogoService");
 const logger = require("../utils/logger");
 
@@ -109,13 +114,23 @@ async function publishPickToProduction(pick, tier = "free") {
     return { published: false, reason: "incomplete" };
   }
 
+  const dailyCap = getDailyCap(tier);
+  const { data: dayRows } = await db
+    .from(table)
+    .select("id")
+    .eq("match_date", row.match_date)
+    .limit(dailyCap + 5);
+  if ((dayRows || []).length >= dailyCap) {
+    return { published: false, reason: "daily_cap", table, cap: dailyCap };
+  }
+
   const existing = await loadProductionKeysForDate(table, row.match_date);
   const key = productionDedupeKey(row);
   const fixtureKey = fixtureTierDedupeKey(row);
   if (existing.has(key)) {
     return { published: false, reason: "duplicate", table };
   }
-  // Un pick por partido/día salvo mercados distintos con confianza alta.
+  // Máx. N tips/partido: el 2º solo con mercado distinto + confianza alta.
   const { data: sameFixtureRows } = await db
     .from(table)
     .select("prediction,confidence")
@@ -123,18 +138,14 @@ async function publishPickToProduction(pick, tier = "free") {
     .eq("home_team_name", row.home_team_name)
     .eq("away_team_name", row.away_team_name)
     .limit(20);
-  if (sameFixtureRows?.length) {
-    const sameMarket = sameFixtureRows.some(
-      (r) => productionDedupeKey(r) === key
-    );
-    if (sameMarket) {
-      return { published: false, reason: "duplicate", table };
-    }
-    const conf = Number(row.confidence) || 0;
-    const hasReliableAlt = sameFixtureRows.some((r) => (Number(r.confidence) || 0) >= 65);
-    if (!hasReliableAlt || conf < 65) {
-      return { published: false, reason: "fixture_covered", table, fixtureKey };
-    }
+  if (
+    !shouldAcceptPickForFixture({
+      existingPicks: sameFixtureRows || [],
+      candidate: row,
+      tier,
+    })
+  ) {
+    return { published: false, reason: "fixture_covered", table, fixtureKey };
   }
 
   const { error } = await db.from(table).insert(row);
@@ -164,29 +175,58 @@ async function publishQueueDayToProduction(matchDate) {
       ? matchDate.trim()
       : todayIsoDate();
 
-  const [freeRows, vipRows, freeKeys, vipKeys] = await Promise.all([
+  const [freeRows, vipRows, freeKeys, vipKeys, plantSnapshot] = await Promise.all([
     getFreePredictions(500, { todayOnly: true, date: day }),
     getVipPredictions(500, { todayOnly: true, date: day }),
     loadProductionKeysForDate(FREE_PROD, day),
     loadProductionKeysForDate(VIP_PROD, day),
+    loadProductionFixtureKeysForDate(day),
   ]);
 
   let publishedFree = 0;
   let publishedVip = 0;
   const seenFree = new Set(freeKeys);
   const seenVip = new Set(vipKeys);
-  /** Un mercado por partido/día en cada tier (alineado al panel de planta). */
-  const fixtureSeenFree = new Set();
-  const fixtureSeenVip = new Set();
+  const maxPerMatch = getMaxPicksPerMatch();
+  const dailyCapFree = getDailyCap("free");
+  const dailyCapVip = getDailyCap("vip");
+  let freePlantTotal = plantSnapshot.freeCount || 0;
+  let vipPlantTotal = plantSnapshot.vipCount || 0;
+
+  /** Precargar tips ya en planta por partido. */
+  const fixturePicksFree = new Map();
+  const fixturePicksVip = new Map();
+  async function preloadPlantFixturePicks(table, map) {
+    try {
+      const { data } = await db
+        .from(table)
+        .select("sport,home_team_name,away_team_name,match_date,prediction,confidence")
+        .eq("match_date", day)
+        .limit(600);
+      for (const row of data || []) {
+        const fk = fixtureTierDedupeKey(row);
+        if (!map.has(fk)) map.set(fk, []);
+        map.get(fk).push(row);
+      }
+    } catch {
+      /* noop */
+    }
+  }
+  await Promise.all([
+    preloadPlantFixturePicks(FREE_PROD, fixturePicksFree),
+    preloadPlantFixturePicks(VIP_PROD, fixturePicksVip),
+  ]);
 
   for (const row of freeRows) {
+    if (freePlantTotal >= dailyCapFree) break;
     const prod = mapPickToProductionRow(row);
     if (!prod.match_date || !prod.prediction) continue;
     const fk = fixtureTierDedupeKey(row);
-    if (fixtureSeenFree.has(fk)) continue;
+    const existingFx = fixturePicksFree.get(fk) || [];
+    if (existingFx.length >= maxPerMatch) continue;
     const key = productionDedupeKey(prod);
-    if (seenFree.has(key)) {
-      fixtureSeenFree.add(fk);
+    if (seenFree.has(key)) continue;
+    if (!shouldAcceptPickForFixture({ existingPicks: existingFx, candidate: prod, tier: "free" })) {
       continue;
     }
     const { error } = await db.from(FREE_PROD).insert(prod);
@@ -195,18 +235,22 @@ async function publishQueueDayToProduction(matchDate) {
       continue;
     }
     seenFree.add(key);
-    fixtureSeenFree.add(fk);
+    if (!fixturePicksFree.has(fk)) fixturePicksFree.set(fk, []);
+    fixturePicksFree.get(fk).push(prod);
     publishedFree += 1;
+    freePlantTotal += 1;
   }
 
   for (const row of vipRows) {
+    if (vipPlantTotal >= dailyCapVip) break;
     const prod = mapPickToProductionRow(row);
     if (!prod.match_date || !prod.prediction) continue;
     const fk = fixtureTierDedupeKey(row);
-    if (fixtureSeenVip.has(fk)) continue;
+    const existingFx = fixturePicksVip.get(fk) || [];
+    if (existingFx.length >= maxPerMatch) continue;
     const key = productionDedupeKey(prod);
-    if (seenVip.has(key)) {
-      fixtureSeenVip.add(fk);
+    if (seenVip.has(key)) continue;
+    if (!shouldAcceptPickForFixture({ existingPicks: existingFx, candidate: prod, tier: "vip" })) {
       continue;
     }
     const { error } = await db.from(VIP_PROD).insert(prod);
@@ -215,8 +259,10 @@ async function publishQueueDayToProduction(matchDate) {
       continue;
     }
     seenVip.add(key);
-    fixtureSeenVip.add(fk);
+    if (!fixturePicksVip.has(fk)) fixturePicksVip.set(fk, []);
+    fixturePicksVip.get(fk).push(prod);
     publishedVip += 1;
+    vipPlantTotal += 1;
   }
 
   logger.info(
@@ -234,6 +280,8 @@ async function publishQueueDayToProduction(matchDate) {
 async function loadProductionFixtureKeysForDate(matchDate) {
   const freeKeys = new Set();
   const vipKeys = new Set();
+  let freeCount = 0;
+  let vipCount = 0;
   for (const [tier, table, set] of [
     ["free", FREE_PROD, freeKeys],
     ["vip", VIP_PROD, vipKeys],
@@ -241,18 +289,21 @@ async function loadProductionFixtureKeysForDate(matchDate) {
     try {
       const { data, error } = await db
         .from(table)
-        .select("sport,home_team_name,away_team_name,match_date")
+        .select("sport,home_team_name,away_team_name,match_date,prediction,confidence")
         .eq("match_date", matchDate)
         .limit(600);
       if (error) continue;
-      for (const row of data || []) {
+      const rows = data || [];
+      if (tier === "free") freeCount = rows.length;
+      else vipCount = rows.length;
+      for (const row of rows) {
         set.add(fixtureTierDedupeKey(row));
       }
     } catch {
       /* noop */
     }
   }
-  return { free: freeKeys, vip: vipKeys };
+  return { free: freeKeys, vip: vipKeys, freeCount, vipCount };
 }
 
 module.exports = {
