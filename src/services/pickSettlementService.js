@@ -131,25 +131,58 @@ async function loadResultsForDate(dateIso) {
   return [...byPair.values()];
 }
 
+async function applyPickPatch(table, pickId, patch) {
+  let u = await db.from(table).eq("id", pickId).update(patch);
+  if (u.error) {
+    const msg = String(u.error.message || "").toLowerCase();
+    if (msg.includes("home_goals") || msg.includes("minute") || msg.includes("column") || msg.includes("live_ended")) {
+      const slim = { updated_at: patch.updated_at };
+      if (patch.state != null || patch.status != null) {
+        if (patch.state != null) slim.state = patch.state;
+        if (patch.status != null) slim.status = patch.status;
+      }
+      // statusField generic
+      for (const k of Object.keys(patch)) {
+        if (["home_goals", "away_goals", "minute", "live_ended"].includes(k)) continue;
+        if (slim[k] === undefined) slim[k] = patch[k];
+      }
+      delete slim.home_goals;
+      delete slim.away_goals;
+      delete slim.minute;
+      delete slim.live_ended;
+      u = await db.from(table).eq("id", pickId).update(slim);
+    }
+  }
+  return u;
+}
+
 async function settleRowsForTable(table, config) {
   const { statusField, homeField, awayField, pickField, hasSport, isLiveTable } = config;
 
   const selectCols = hasSport
-    ? `id, match_date, sport, ${homeField}, ${awayField}, ${pickField}, ${statusField}, home_goals, away_goals, minute`
+    ? `id, match_date, sport, ${homeField}, ${awayField}, ${pickField}, ${statusField}, home_goals, away_goals, minute, live_ended, outcome`
     : `id, match_date, ${homeField}, ${awayField}, ${pickField}, ${statusField}, home_goals, away_goals, minute`;
 
-  // Pendientes + ganados/perdidos sin marcador (reparar 0-0 inconsistente).
   let picks = [];
-  let { data, error } = await db.from(table).select(selectCols).limit(400);
+  let { data, error } = await db.from(table).select(selectCols).limit(500);
   if (error) {
     const msg = String(error.message || "").toLowerCase();
-    if (msg.includes("home_goals") || msg.includes("column")) {
+    if (msg.includes("home_goals") || msg.includes("live_ended") || msg.includes("column")) {
       const slimCols = hasSport
-        ? `id, match_date, sport, ${homeField}, ${awayField}, ${pickField}, ${statusField}`
-        : `id, match_date, ${homeField}, ${awayField}, ${pickField}, ${statusField}`;
-      const retry = await db.from(table).select(slimCols).limit(400);
-      data = retry.data;
-      error = retry.error;
+        ? `id, match_date, sport, ${homeField}, ${awayField}, ${pickField}, ${statusField}, home_goals, away_goals, minute`
+        : `id, match_date, ${homeField}, ${awayField}, ${pickField}, ${statusField}, home_goals, away_goals, minute`;
+      const retry = await db.from(table).select(slimCols).limit(500);
+      if (retry.error) {
+        const slim2 = hasSport
+          ? `id, match_date, sport, ${homeField}, ${awayField}, ${pickField}, ${statusField}`
+          : `id, match_date, ${homeField}, ${awayField}, ${pickField}, ${statusField}`;
+        const retry2 = await db.from(table).select(slim2).limit(500);
+        data = retry2.data;
+        error = retry2.error;
+      } else {
+        data = retry.data;
+        error = null;
+      }
     }
   }
   if (error) {
@@ -165,11 +198,10 @@ async function settleRowsForTable(table, config) {
     const hg = Number(p.home_goals) || 0;
     const ag = Number(p.away_goals) || 0;
     if (isLiveTable) {
-      if (p.live_ended === true) return false;
-      return st === "live" || st === "pending" || st === "won" || st === "lost";
+      if (p.live_ended === true && (st === "won" || st === "lost")) return false;
+      return st === "live" || st === "pending" || st === "won" || st === "lost" || !st;
     }
     if (st === "pending" || st === "live") return true;
-    // Reparar won/lost con marcador vacío (inconsistencia UI).
     if ((st === "won" || st === "lost" || st === "ganada" || st === "perdida") && hg === 0 && ag === 0) {
       return true;
     }
@@ -179,12 +211,16 @@ async function settleRowsForTable(table, config) {
   if (!picks.length) return { updated: 0, scored: 0 };
 
   const byDate = new Map();
+  const noDate = [];
   for (const p of picks) {
-    const d = String(p.match_date || "").slice(0, 10);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) continue;
     if (hasSport) {
       const sp = String(p.sport || "football").toLowerCase();
       if (sp && sp !== "football" && sp !== "soccer") continue;
+    }
+    const d = String(p.match_date || "").slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) {
+      noDate.push(p);
+      continue;
     }
     if (!byDate.has(d)) byDate.set(d, []);
     byDate.get(d).push(p);
@@ -193,62 +229,84 @@ async function settleRowsForTable(table, config) {
   let updated = 0;
   let scored = 0;
 
-  for (const [dateIso, datePicks] of byDate) {
-    const results = await loadResultsForDate(dateIso);
-    if (results.length === 0) continue;
+  async function processPick(pick, fx) {
+    const home = pick[homeField];
+    const away = pick[awayField];
+    const pickText = pick[pickField];
+    const prevState = String(pick[statusField] || "pending").toLowerCase();
 
-    for (const pick of datePicks) {
-      const home = pick[homeField];
-      const away = pick[awayField];
-      const pickText = pick[pickField];
-      const fx = findFixtureRow(results, home, away);
-      if (!fx) continue;
+    let hg = Number(pick.home_goals) || 0;
+    let ag = Number(pick.away_goals) || 0;
+    let minute = Number(pick.minute) || 0;
+    let finished = false;
 
-      const { hg, ag } = goalsFromFixture(fx);
-      const finished = isFinishedStatus(fx.status);
-      const minute = Number(fx.minute) || 0;
-      const outcome = evaluateFootballPickFromText(pickText, hg, ag, home, away, {
-        matchFinished: finished,
-      });
+    if (fx) {
+      const g = goalsFromFixture(fx);
+      // Preferir marcador de fixture si trae más info / partido más avanzado.
+      const fxTotal = g.hg + g.ag;
+      const selfTotal = hg + ag;
+      if (fxTotal >= selfTotal) {
+        hg = g.hg;
+        ag = g.ag;
+      }
+      minute = Math.max(minute, Number(fx.minute) || 0);
+      finished = isFinishedStatus(fx.status);
+    }
 
-      const patch = { updated_at: new Date().toISOString() };
+    // 1) Early settle con marcador propio o de fixture (NO esperar FT en overs/BTTS).
+    const outcome = evaluateFootballPickFromText(pickText, hg, ag, home, away, {
+      matchFinished: finished,
+    });
+
+    const patch = { updated_at: new Date().toISOString() };
+    if (hg > 0 || ag > 0 || minute > 0 || fx) {
       patch.home_goals = hg;
       patch.away_goals = ag;
       if (minute > 0) patch.minute = minute;
+    }
 
-      const prevState = String(pick[statusField] || "pending").toLowerCase();
-      if (outcome === "won" || outcome === "lost" || outcome === "void") {
-        patch[statusField] = outcome;
-        if (isLiveTable) {
-          patch.outcome = outcome;
-          if (finished) {
-            patch.live_ended = true;
-            // Mantener estado won/lost visible (no "ended" opaco).
-            patch[statusField] = outcome;
-          }
-        }
-      } else if (isLiveTable && (finished || isLiveStatus(fx.status))) {
-        if (prevState !== "won" && prevState !== "lost") {
-          patch[statusField] = finished ? "pending" : "live";
-        }
+    if (outcome === "won" || outcome === "lost" || outcome === "void") {
+      patch[statusField] = outcome;
+      if (isLiveTable) {
+        patch.outcome = outcome;
+        if (finished) patch.live_ended = true;
       }
+    } else if (isLiveTable && finished) {
+      patch[statusField] = prevState === "won" || prevState === "lost" ? prevState : "pending";
+      patch.live_ended = true;
+      if (prevState === "won" || prevState === "lost") patch.outcome = prevState;
+    } else if (isLiveTable && (minute > 0 || hg + ag > 0) && prevState !== "won" && prevState !== "lost") {
+      patch[statusField] = "live";
+    }
 
-      let u = await db.from(table).eq("id", pick.id).update(patch);
-      if (u.error) {
-        const msg = String(u.error.message || "").toLowerCase();
-        if (msg.includes("home_goals") || msg.includes("minute") || msg.includes("column")) {
-          const slim = { updated_at: patch.updated_at };
-          if (patch[statusField]) slim[statusField] = patch[statusField];
-          if (patch.outcome) slim.outcome = patch.outcome;
-          u = await db.from(table).eq("id", pick.id).update(slim);
-        }
-      }
-      if (u.error) {
-        logger.warn(`Settlement update ${table} ${pick.id}: ${u.error.message}`);
-        continue;
-      }
-      scored += 1;
-      if (patch[statusField] && patch[statusField] !== prevState) updated += 1;
+    if (Object.keys(patch).length <= 1) return;
+
+    const u = await applyPickPatch(table, pick.id, patch);
+    if (u.error) {
+      logger.warn(`Settlement update ${table} ${pick.id}: ${u.error.message}`);
+      return;
+    }
+    scored += 1;
+    if (patch[statusField] && patch[statusField] !== prevState) updated += 1;
+  }
+
+  // Sin fecha: solo self-score.
+  for (const pick of noDate) {
+    await processPick(pick, null);
+  }
+
+  for (const [dateIso, datePicks] of byDate) {
+    let results = [];
+    try {
+      results = await loadResultsForDate(dateIso);
+    } catch {
+      results = [];
+    }
+    for (const pick of datePicks) {
+      const fx = results.length
+        ? findFixtureRow(results, pick[homeField], pick[awayField])
+        : null;
+      await processPick(pick, fx);
     }
   }
 

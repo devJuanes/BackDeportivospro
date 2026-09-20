@@ -14,6 +14,10 @@ const { enrichPickLogos } = require("../services/futboolLogoService");
 const { notifyLiveTip } = require("../services/telegramService");
 const { notifyLivePick } = require("../services/predictionNotifyService");
 const { upsertFixtures } = require("../models/fixtureModel");
+const { getDailyCap } = require("../utils/pickVolume");
+const { isCornersOrCardsMarket } = require("../utils/pickResultEvaluator");
+const { formatDateInTimezone } = require("../utils/helpers");
+const { db } = require("../config/database");
 const logger = require("../utils/logger");
 
 function delay(ms) {
@@ -106,38 +110,63 @@ async function monitorLiveMatches() {
     }
   }
 
-  const aiLiveLimit = Number.parseInt(process.env.FACTORY_AI_LIVE_MATCH_LIMIT || "12", 10);
+  const aiLiveLimit = Number.parseInt(process.env.FACTORY_AI_LIVE_MATCH_LIMIT || "5", 10);
   const gapMs = Number.parseInt(process.env.FACTORY_AI_DELAY_MS || "1200", 10);
+  const liveCap = getDailyCap("live");
+  const today = formatDateInTimezone(new Date(), process.env.FACTORY_TIMEZONE || "America/Bogota");
+  let liveTodayCount = 0;
+  try {
+    const { data: liveRows } = await db
+      .from("abetlive")
+      .select("id")
+      .eq("match_date", today)
+      .limit(liveCap + 20);
+    liveTodayCount = (liveRows || []).length;
+  } catch {
+    liveTodayCount = 0;
+  }
+
   let aiLiveCalls = 0;
   let created = 0;
+  const maxCreateThisCycle = Number.parseInt(process.env.FACTORY_LIVE_CREATE_PER_CYCLE || "4", 10);
 
   for (const match of allLiveMatches) {
+    if (liveTodayCount + created >= liveCap) break;
+    if (created >= Math.max(1, maxCreateThisCycle)) break;
+
     const heuristic = generateLiveSuggestion(match);
     if (!heuristic) continue;
+    if (isCornersOrCardsMarket(heuristic.prediction || "")) continue;
 
     let suggestion = {
       ...heuristic,
       home_goals: match.homeGoals,
       away_goals: match.awayGoals,
-      match_date: match.match_date,
+      match_date: match.match_date || today,
     };
     if (aiLiveCalls < aiLiveLimit) {
       const refined = await generateLiveInsightFromMatch(match, heuristic);
       aiLiveCalls += 1;
       if (refined && refined.pick && !refined.invalid_context) {
-        suggestion = {
-          ...suggestion,
-          prediction: refined.pick,
-          confidence: refined.confidence,
-          odds: refined.odds ?? heuristic.odds,
-          ai_rationale: refined.analysis,
-        };
+        if (isCornersOrCardsMarket(refined.pick)) {
+          /* descartar corners/cards de IA */
+        } else {
+          suggestion = {
+            ...suggestion,
+            prediction: refined.pick,
+            confidence: refined.confidence,
+            odds: refined.odds ?? heuristic.odds,
+            ai_rationale: refined.analysis,
+          };
+        }
       }
       if (gapMs > 0 && aiLiveCalls < aiLiveLimit) {
         await delay(gapMs);
       }
     }
 
+    if (isCornersOrCardsMarket(suggestion.prediction || "")) continue;
+    if ((Number(suggestion.confidence) || 0) < 63) continue;
     if (!shouldCreateAlert(suggestion)) continue;
     const sinceIso = new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString();
     const duplicate = await existsRecentLivePrediction(suggestion, sinceIso);

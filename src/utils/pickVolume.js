@@ -13,6 +13,8 @@ function getMaxPicksPerMatch() {
 function getDailyCap(tier = "free") {
   const free = Number.parseInt(process.env.FACTORY_DAILY_CAP_FREE || "40", 10);
   const vip = Number.parseInt(process.env.FACTORY_DAILY_CAP_VIP || "40", 10);
+  const live = Number.parseInt(process.env.FACTORY_DAILY_CAP_LIVE || "18", 10);
+  if (tier === "live") return Math.max(5, Number.isFinite(live) ? live : 18);
   const n = tier === "vip" ? vip : free;
   return Math.max(5, Number.isFinite(n) ? n : 40);
 }

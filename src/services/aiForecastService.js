@@ -264,11 +264,12 @@ function buildLivePrompt(match, heuristic) {
     "1) Ritmo: ¿el marcador y el minuto justifican más goles, o partido cerrado?",
     "2) Favorito vs underdog: si un grande/favorito va empatando o perdiendo, valora remonte o next goal — SOLO si el ritmo lo respalda.",
     "3) NO digas siempre 'va a haber otro gol' solo porque van 1-0 o 2-0 al 70'. Eso es basura.",
-    "4) Prefiere mercados con lógica: next team to score, BTTS, over/under RESTANTE de goles, corners/cards solo si el contexto es claro.",
-    "5) Si NO hay edge claro → invalid_context true (mejor silencio que tip malo).",
-    "6) confidence conservadora: 58-78 tipico; >82 solo con evidencia fuerte del marcador+minuto.",
+    "4) Prefiere mercados con lógica: next team to score, BTTS, over/under de GOLES solo si el ritmo es claro.",
+    "5) PROHIBIDO: tips de corners, tarjetas, overs absurdos (5.5/6.5/7.5) o 'otro gol' solo porque van ganando.",
+    "6) Si NO hay edge claro → invalid_context true (mejor silencio que tip malo).",
+    "7) confidence conservadora: 60-76; >80 solo con evidencia fuerte.",
     "",
-    'Formato: { "pick": "texto corto", "confidence": 55-85, "analysis": "2-4 frases: POR QUÉ (estrategia, no solo el marcador)", "odds_hint": 1.5, "invalid_context": false, "strategy_tag": "remonte|ritmo_abierto|favorito_presion|partido_cerrado|corners|otro" }',
+    'Formato: { "pick": "texto corto", "confidence": 55-85, "analysis": "2-4 frases: POR QUÉ (estrategia)", "odds_hint": 1.5, "invalid_context": false, "strategy_tag": "remonte|ritmo_abierto|favorito_presion|partido_cerrado|otro" }',
   ].join("\n");
 }
 

@@ -1,8 +1,8 @@
 /**
  * Evalúa tip de fútbol vs marcador.
- * - matchFinished=false → solo cierra si el resultado YA está decidido (early win/lose).
- * - matchFinished=true → won/lost definitivos (o null si no se puede parsear).
- * Devuelve won | lost | void | null.
+ * Early settle (sin FT): overs/unders de GOLES, BTTS.
+ * Corners/tarjetas: no se liquidan con goles (evita falsos won).
+ * 1X2 / empate: solo a partido terminado.
  */
 
 function norm(value) {
@@ -14,13 +14,18 @@ function norm(value) {
     .trim();
 }
 
+function isCornersOrCardsMarket(t) {
+  return /corner|esquin|tarjeta|card|amonest|faltas|fouls|tiros a puerta|shots on target|saques de banda/.test(
+    t
+  );
+}
+
+function isGoalsMarket(t) {
+  if (isCornersOrCardsMarket(t)) return false;
+  return /gol|goal|over|under|mas de|menos de|ambos marcan|btts|\d+\.\d+/.test(t);
+}
+
 /**
- * @param {string} pickText
- * @param {number} homeGoals
- * @param {number} awayGoals
- * @param {string} homeName
- * @param {string} awayName
- * @param {{ matchFinished?: boolean }} [opts]
  * @returns {'won'|'lost'|'void'|null}
  */
 function evaluateFootballPickFromText(
@@ -41,9 +46,18 @@ function evaluateFootballPickFromText(
 
   if (!t) return null;
 
-  const overM = t.match(/(?:mas de|más de|over)\s*\+?\s*([\d,.]+)/);
-  if (overM) {
-    const line = Number.parseFloat(overM[1].replace(",", "."));
+  // No liquidar corners/cards con marcador de goles (evita won falsos).
+  if (isCornersOrCardsMarket(t)) {
+    return null;
+  }
+
+  // Over / Más de X (goles)
+  const overM =
+    t.match(/(?:mas de|over)\s*\+?\s*([\d,.]+)/) ||
+    t.match(/\bo\/u\s*\+?\s*([\d,.]+)/) ||
+    t.match(/\+([\d,.]+)\s*(?:gol|goal)/);
+  if (overM && (isGoalsMarket(t) || /mas de|over|o\/u/.test(t))) {
+    const line = Number.parseFloat(String(overM[1]).replace(",", "."));
     if (Number.isFinite(line)) {
       if (total > line) return "won";
       if (matchFinished) return "lost";
@@ -51,9 +65,10 @@ function evaluateFootballPickFromText(
     }
   }
 
+  // Under / Menos de X
   const underM = t.match(/(?:menos de|under)\s*\+?\s*([\d,.]+)/);
   if (underM) {
-    const line = Number.parseFloat(underM[1].replace(",", "."));
+    const line = Number.parseFloat(String(underM[1]).replace(",", "."));
     if (Number.isFinite(line)) {
       if (total > line) return "lost";
       if (matchFinished) return total < line ? "won" : "lost";
@@ -76,7 +91,11 @@ function evaluateFootballPickFromText(
     return null;
   }
 
-  // Resto de mercados: solo al final del partido.
+  // "Siguiente gol" / next goal — no se cierra early con total; solo FT si mencionan equipo.
+  if (/siguiente gol|next goal|proximo gol/.test(t) && !matchFinished) {
+    return null;
+  }
+
   if (!matchFinished) return null;
 
   if (/\bempate\b|\bdraw\b/.test(t) && !/no\s+empate/.test(t)) {
@@ -97,22 +116,13 @@ function evaluateFootballPickFromText(
   const awayFrag = an.length >= 5 ? an.slice(0, Math.min(18, an.length)) : "";
   const mentionsHome = homeFrag && t.includes(homeFrag);
   const mentionsAway = awayFrag && t.includes(awayFrag);
-
-  const victoryCue = /victoria|gana|triunfo\s+de|wins?\b|mercado\s+1x2|siguiente gol/.test(t);
+  const victoryCue = /victoria|gana|triunfo\s+de|wins?\b|mercado\s+1x2/.test(t);
 
   if (victoryCue) {
-    if (mentionsHome && !mentionsAway) {
-      return h > a ? "won" : "lost";
-    }
-    if (mentionsAway && !mentionsHome) {
-      return a > h ? "won" : "lost";
-    }
-    if (/\blocal\b/.test(t) && !/visitante/.test(t)) {
-      return h > a ? "won" : "lost";
-    }
-    if (/visitante/.test(t)) {
-      return a > h ? "won" : "lost";
-    }
+    if (mentionsHome && !mentionsAway) return h > a ? "won" : "lost";
+    if (mentionsAway && !mentionsHome) return a > h ? "won" : "lost";
+    if (/\blocal\b/.test(t) && !/visitante/.test(t)) return h > a ? "won" : "lost";
+    if (/visitante/.test(t)) return a > h ? "won" : "lost";
   }
 
   return null;
@@ -120,4 +130,5 @@ function evaluateFootballPickFromText(
 
 module.exports = {
   evaluateFootballPickFromText,
+  isCornersOrCardsMarket,
 };
