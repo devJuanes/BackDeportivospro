@@ -12,6 +12,7 @@ const { liveSignalDedupeKey } = require("../utils/predictionDedupe");
 const { enrichPickLogos } = require("../services/futboolLogoService");
 const { notifyLiveTip } = require("../services/telegramService");
 const { notifyLivePick } = require("../services/predictionNotifyService");
+const { upsertFixtures } = require("../models/fixtureModel");
 const logger = require("../utils/logger");
 
 function delay(ms) {
@@ -20,7 +21,7 @@ function delay(ms) {
 
 const recentAlerts = new Map();
 
-const LIVE_ALERT_COOLDOWN_MS = Number.parseInt(process.env.LIVE_ALERT_COOLDOWN_MS || `${8 * 60 * 1000}`, 10);
+const LIVE_ALERT_COOLDOWN_MS = Number.parseInt(process.env.LIVE_ALERT_COOLDOWN_MS || `${3 * 60 * 1000}`, 10);
 
 function shouldCreateAlert(alert) {
   const key = liveSignalDedupeKey(
@@ -32,11 +33,37 @@ function shouldCreateAlert(alert) {
   const now = Date.now();
   const lastTs = recentAlerts.get(key) || 0;
   const diffMs = now - lastTs;
-  if (diffMs < Math.max(120000, LIVE_ALERT_COOLDOWN_MS)) {
+  if (diffMs < Math.max(60000, LIVE_ALERT_COOLDOWN_MS)) {
     return false;
   }
   recentAlerts.set(key, now);
   return true;
+}
+
+async function cacheLiveScoreboard(matches = []) {
+  const rows = (matches || [])
+    .filter((m) => m && (m.eventId || m.source_event_id))
+    .map((m) => ({
+      source: m.source || "espn_live",
+      eventId: m.eventId || m.source_event_id,
+      sport: m.sport || "football",
+      league: m.league || "Live",
+      match_date: m.match_date,
+      match_hour: m.match_hour || "00:00",
+      homeTeam: m.homeTeam,
+      awayTeam: m.awayTeam,
+      status: m.status === "in" || m.status === "live" ? "in" : m.status || "in",
+      minute: m.minute || 0,
+      homeGoals: m.homeGoals || 0,
+      awayGoals: m.awayGoals || 0,
+    }));
+  if (!rows.length) return 0;
+  try {
+    return await upsertFixtures(rows);
+  } catch (error) {
+    logger.warn(`[live] cache scoreboard: ${error.message}`);
+    return 0;
+  }
 }
 
 async function monitorLiveMatches() {
@@ -48,12 +75,12 @@ async function monitorLiveMatches() {
       const rows = await getLiveMatchesBySport(sport);
       allLiveMatches.push(...rows);
     } catch (error) {
-      // DNS / red: degradar sin tumbar el ciclo (sigue cleanup + settle por caché).
       logger.warn(`No se pudieron leer vivos para ${sport}: ${error.message}`);
     }
   }
 
-  // Ciclo de vida: solo día actual (America/Bogota), settle al finalizar, limpia stale.
+  await cacheLiveScoreboard(allLiveMatches);
+
   let lifecycle = { settled: 0, refreshed: 0, calendarClosed: 0 };
   try {
     lifecycle = await runLiveLifecycleOnce(allLiveMatches);
@@ -61,10 +88,7 @@ async function monitorLiveMatches() {
     logger.warn(`Live lifecycle omitido: ${error.message}`);
   }
 
-  const activePairKeys = new Set(
-    allLiveMatches.map((m) => `${m.homeTeam}|${m.awayTeam}`)
-  );
-  // Solo reconciliar por ausencia en scoreboard si hay al menos un vivo (evita DNS vacío → matar todos).
+  const activePairKeys = new Set(allLiveMatches.map((m) => `${m.homeTeam}|${m.awayTeam}`));
   if (activePairKeys.size > 0) {
     const sinceReconcileIso = new Date(Date.now() - 14 * 3600 * 1000).toISOString();
     try {
@@ -74,16 +98,14 @@ async function monitorLiveMatches() {
     }
   }
 
-  const aiLiveLimit = Number.parseInt(process.env.FACTORY_AI_LIVE_MATCH_LIMIT || "5", 10);
-  const gapMs = Number.parseInt(process.env.FACTORY_AI_DELAY_MS || "2500", 10);
+  const aiLiveLimit = Number.parseInt(process.env.FACTORY_AI_LIVE_MATCH_LIMIT || "12", 10);
+  const gapMs = Number.parseInt(process.env.FACTORY_AI_DELAY_MS || "1200", 10);
   let aiLiveCalls = 0;
   let created = 0;
 
   for (const match of allLiveMatches) {
     const heuristic = generateLiveSuggestion(match);
-    if (!heuristic) {
-      continue;
-    }
+    if (!heuristic) continue;
 
     let suggestion = {
       ...heuristic,
@@ -108,9 +130,7 @@ async function monitorLiveMatches() {
       }
     }
 
-    if (!shouldCreateAlert(suggestion)) {
-      continue;
-    }
+    if (!shouldCreateAlert(suggestion)) continue;
     const sinceIso = new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString();
     const duplicate = await existsRecentLivePrediction(suggestion, sinceIso);
     if (!duplicate) {
@@ -125,7 +145,7 @@ async function monitorLiveMatches() {
         await notifyLiveTip(row || suggestion);
         await notifyLivePick(row || suggestion);
       } catch {
-        /* alertas opcionales */
+        /* opcional */
       }
       const liveId = row?.id;
       if (liveId) {

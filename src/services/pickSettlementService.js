@@ -109,7 +109,14 @@ async function settleRowsForTable(table, config) {
   for (const p of picks) {
     const d = String(p.match_date || "").slice(0, 10);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) continue;
-    if (hasSport && String(p.sport || "football").toLowerCase() !== "football") continue;
+    if (hasSport) {
+      const sp = String(p.sport || "football").toLowerCase();
+      // Por ahora el evaluador de texto es strong en football; otros deportes
+      // se liquidan si el fixture terminó y el tip es trivial pending→skip.
+      if (sp !== "football" && sp !== "soccer" && sp !== "basketball" && sp !== "hockey" && sp !== "tennis") {
+        continue;
+      }
+    }
     if (!byDate.has(d)) byDate.set(d, []);
     byDate.get(d).push(p);
   }

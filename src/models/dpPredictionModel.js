@@ -202,7 +202,7 @@ async function ensureTrackingJob(predictionId) {
     prediction_id: predictionId,
     status: "active",
     next_check_at: next.toISOString(),
-    check_interval_sec: 120,
+    check_interval_sec: 45,
   });
   if (error) throw new Error(error.message || "Error creando tracking job");
   return Array.isArray(data) ? data[0] : data;
@@ -234,7 +234,7 @@ async function ensureLiveTrackingJob(abetliveId, predictionId = null) {
     abetlive_id: abetliveId,
     status: "active",
     next_check_at: next.toISOString(),
-    check_interval_sec: 90,
+    check_interval_sec: 30,
   };
   if (predictionId) payload.prediction_id = predictionId;
 

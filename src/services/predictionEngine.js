@@ -328,123 +328,121 @@ function buildPredictionsFromFixtures(fixtures = [], limits = { free: 10, vip: 1
 }
 
 function generateLiveSuggestion(match) {
+  const sport = String(match.sport || "football").toLowerCase();
   const total = (match.homeGoals || 0) + (match.awayGoals || 0);
   const diff = Math.abs((match.homeGoals || 0) - (match.awayGoals || 0));
   const minute = match.minute || 0;
-
-  if (minute < 0) {
-    return null;
-  }
-  if (minute === 0 && total === 0) {
-    return null;
-  }
-
-  if (match.sport === "football" && minute >= 70 && total === 0) {
-    return {
-      sport: match.sport || "football",
-      league: match.league || "Live League",
-      home_team_name: match.homeTeam,
-      away_team_name: match.awayTeam,
-      minute,
-      prediction: "Over 0.5 goles",
-      confidence: 74,
-      odds: 1.38,
-    };
-  }
-
-  if (match.sport === "football" && minute >= 55 && total === 1 && diff <= 1) {
-    return {
-      sport: match.sport || "football",
-      league: match.league || "Live League",
-      home_team_name: match.homeTeam,
-      away_team_name: match.awayTeam,
-      minute,
-      prediction: "Over 1.5 goles",
-      confidence: 68,
-      odds: 1.62,
-    };
-  }
-
-  if (match.sport === "football" && minute >= 35 && minute <= 75 && total >= 2 && diff <= 2) {
-    return {
-      sport: match.sport || "football",
-      league: match.league || "Live League",
-      home_team_name: match.homeTeam,
-      away_team_name: match.awayTeam,
-      minute,
-      prediction: "Over 2.5 goles",
-      confidence: 67,
-      odds: 1.66,
-    };
-  }
-
-  if (match.sport === "basketball" && minute >= 24 && total >= 120 && diff <= 18) {
-    return {
-      sport: match.sport,
-      league: match.league || "Live League",
-      home_team_name: match.homeTeam,
-      away_team_name: match.awayTeam,
-      minute,
-      prediction: "Más de 169.5 puntos en vivo",
-      confidence: 69,
-      odds: 1.64,
-    };
-  }
-
-  if (match.sport === "football" && minute >= 16 && minute <= 44 && total >= 2 && diff <= 2) {
-    return {
-      sport: match.sport || "football",
-      league: match.league || "Live League",
-      home_team_name: match.homeTeam,
-      away_team_name: match.awayTeam,
-      minute,
-      prediction: "Más de 2.5 goles",
-      confidence: 64,
-      odds: 1.58,
-    };
-  }
-
   const hg = match.homeGoals || 0;
   const ag = match.awayGoals || 0;
-  if (match.sport === "football" && minute >= 22 && minute <= 78) {
-    if ((hg === 0 && ag >= 2) || (ag === 0 && hg >= 2)) {
+  const base = {
+    sport,
+    league: match.league || "Live League",
+    home_team_name: match.homeTeam,
+    away_team_name: match.awayTeam,
+    minute,
+  };
+
+  if (minute < 0) return null;
+  if (minute === 0 && total === 0) return null;
+
+  // Football — estrategia (no spam de "otro gol")
+  if (sport === "football" || sport === "soccer") {
+    // Favorito aparente perdiendo / empatando tarde: next goal del que remonta (heurística de presión)
+    if (minute >= 60 && minute <= 88 && diff === 1) {
+      const trailing = hg < ag ? match.homeTeam : match.awayTeam;
       return {
-        sport: match.sport || "football",
-        league: match.league || "Live League",
-        home_team_name: match.homeTeam,
-        away_team_name: match.awayTeam,
-        minute,
-        prediction: "Ambos equipos marcan: SI",
-        confidence: 62,
-        odds: 1.74,
+        ...base,
+        prediction: `Siguiente gol: ${trailing}`,
+        confidence: 64,
+        odds: 1.85,
+        analysis: `Marcador cerrado ${hg}-${ag} al ${minute}'. El equipo que va abajo suele empujar; tip de remonte selectivo, no over ciego.`,
       };
     }
+
+    // 0-0 tardío: over 0.5 restante con confianza moderada (partido puede seguir cerrado)
+    if (minute >= 75 && total === 0) {
+      return {
+        ...base,
+        prediction: "Over 0.5 goles (restante)",
+        confidence: 61,
+        odds: 1.55,
+        analysis: `0-0 al ${minute}'. Solo tip de gol restante con confianza moderada; muchos partidos se quedan en blanco.`,
+      };
+    }
+
+    // Partido abierto 1ª/2ª: BTTS si ambos ya atacan (al menos 1 gol y diff chico)
+    if (minute >= 50 && minute <= 80 && total === 1 && diff === 1) {
+      return {
+        ...base,
+        prediction: "Ambos equipos marcan: SI",
+        confidence: 63,
+        odds: 1.72,
+        analysis: `Va ${hg}-${ag} en tramo intermedio. El que va abajo busca el empate; BTTS tiene más lógica que over agresivo.`,
+      };
+    }
+
+    // Ritmo alto temprano
+    if (minute >= 25 && minute <= 55 && total >= 2 && diff <= 2) {
+      return {
+        ...base,
+        prediction: "Over 2.5 goles",
+        confidence: 66,
+        odds: 1.68,
+        analysis: `Ritmo alto (${total} goles antes del ${minute}'). Over total coherente con el partido abierto.`,
+      };
+    }
+
+    // Empate vivo mid-game: next goal / no forzar over
+    if (minute >= 40 && minute <= 70 && hg === ag && total <= 2) {
+      return {
+        ...base,
+        prediction: "Siguiente gol: cualquiera",
+        confidence: 58,
+        odds: 1.4,
+        analysis: `Empate ${hg}-${ag} en tramo central. Preferimos next goal genérico frente a over especulativo.`,
+      };
+    }
+
+    return null;
   }
 
-  if (match.sport === "football" && minute >= 48 && minute <= 82 && total === 1 && diff === 1) {
-    return {
-      sport: match.sport || "football",
-      league: match.league || "Live League",
-      home_team_name: match.homeTeam,
-      away_team_name: match.awayTeam,
-      minute,
-      prediction: "Más de 1.5 goles",
-      confidence: 63,
-      odds: 1.52,
-    };
+  if (sport === "basketball") {
+    if (minute >= 24 && total >= 100 && diff <= 14) {
+      return {
+        ...base,
+        prediction: "Partido con ritmo: más puntos del line en vivo",
+        confidence: 62,
+        odds: 1.7,
+        analysis: `Marcador ${hg}-${ag} con diferencia corta; ritmo sugiere over de puntos, no spread ciego.`,
+      };
+    }
+    return null;
   }
 
-  if (match.sport === "football" && minute >= 52 && minute <= 84 && total >= 3 && diff <= 2) {
-    return {
-      sport: match.sport || "football",
-      league: match.league || "Live League",
-      home_team_name: match.homeTeam,
-      away_team_name: match.awayTeam,
-      minute,
-      prediction: "Más de 3.5 goles",
-      confidence: 61,
-      odds: 1.68,
-    };
+  if (sport === "tennis") {
+    if (minute > 0 && diff <= 1) {
+      return {
+        ...base,
+        prediction: "Set competitivo — favorito a cerrar si mantiene servicio",
+        confidence: 57,
+        odds: 1.65,
+        analysis: "Lectura conservadora en vivo: solo tip si el set sigue reñido.",
+      };
+    }
+    return null;
+  }
+
+  if (sport === "hockey") {
+    if (minute >= 30 && total <= 3 && diff <= 1) {
+      return {
+        ...base,
+        prediction: "Over 4.5 goles totales (ritmo)",
+        confidence: 60,
+        odds: 1.75,
+        analysis: `Hockey ${hg}-${ag} con margen corto; over total solo con ritmo razonable.`,
+      };
+    }
+    return null;
   }
 
   return null;

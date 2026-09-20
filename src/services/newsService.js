@@ -1,9 +1,15 @@
 const { scrapeSportsNews } = require("../scrapers/newsScraper");
 const { createNewsIfNew } = require("../models/newsModel");
-const { appendScrapedToSportsNews } = require("../models/sportsNewsModel");
+const { appendOwnedNews } = require("../models/sportsNewsModel");
 const { generateAndAppendAiFeed } = require("./newsAiFeedService");
 const logger = require("../utils/logger");
 
+/**
+ * Ingesta noticias PROPIAS:
+ * - scrapea título/resumen/imagen de fuentes
+ * - descarga imagen a data/news/images
+ * - guarda contenido en MatuDB (sin redirigir al medio)
+ */
 async function collectAndStoreSportsNews() {
   const scraped = await scrapeSportsNews();
   const stored = [];
@@ -11,18 +17,20 @@ async function collectAndStoreSportsNews() {
 
   for (const item of scraped) {
     try {
-      const row = await createNewsIfNew(item);
-      if (row) {
-        stored.push(row);
-      }
+      const row = await createNewsIfNew({
+        ...item,
+        // editorial: no forzar click-out
+        url: item.url || "#",
+      });
+      if (row) stored.push(row);
     } catch (error) {
-      logger.warn(`No se pudo guardar noticia (${item.title}): ${error.message}`);
+      logger.warn(`No se pudo guardar noticia editorial (${item.title}): ${error.message}`);
     }
     try {
-      const sn = await appendScrapedToSportsNews(item);
+      const sn = await appendOwnedNews(item);
       if (sn) feed.push(sn);
     } catch (error) {
-      logger.warn(`No se pudo volcar noticia al feed (${item.title}): ${error.message}`);
+      logger.warn(`No se pudo guardar noticia propia (${item.title}): ${error.message}`);
     }
   }
 
@@ -33,7 +41,9 @@ async function collectAndStoreSportsNews() {
     logger.warn(`[news-ai] ${error.message}`);
   }
 
-  logger.info(`Noticias guardadas (editorial): ${stored.length}, feed app: ${feed.length}, IA feed: ${aiFeed.length}`);
+  logger.info(
+    `Noticias propias: editorial=${stored.length}, feed=${feed.length}, ia=${aiFeed.length}`
+  );
   return [...stored, ...feed, ...aiFeed];
 }
 

@@ -4,3 +4,6 @@ node_modules/
 .wwebjs_cache/
 logs/
 npm-debug.log*
+
+data/news/images/*
+!data/news/images/.gitkeep

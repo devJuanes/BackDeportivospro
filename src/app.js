@@ -101,6 +101,13 @@ app.use(
     fallthrough: true,
   })
 );
+app.use(
+  "/assets/news",
+  express.static(path.join(__dirname, "..", "data", "news", "images"), {
+    maxAge: "1d",
+    fallthrough: true,
+  })
+);
 app.use(express.static(path.join(__dirname, "..", "public")));
 
 app.use("/api/predictions", predictionRoutes);

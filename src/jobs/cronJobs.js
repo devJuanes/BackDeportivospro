@@ -30,12 +30,10 @@ function startCronJobs() {
   }
 
   const factoryCron = process.env.CRON_FACTORY_EXPRESSION?.trim() || "*/15 * * * *";
-  const liveCron = process.env.CRON_LIVE_EXPRESSION?.trim() || "*/5 * * * *";
-  const newsCron = process.env.CRON_NEWS_EXPRESSION?.trim() || "*/45 * * * *";
+  const liveCron = process.env.CRON_LIVE_EXPRESSION?.trim() || "*/1 * * * *";
+  const newsCron = process.env.CRON_NEWS_EXPRESSION?.trim() || "*/30 * * * *";
 
   // Fábrica: por defecto cada 15 min (VPS pequeño). Override CRON_FACTORY_EXPRESSION.
-  // includeNews=true en el cron principal: integra también scraping de noticias del ciclo,
-  // así no dependemos solo del run-now manual del admin.
   scheduleSafe(factoryCron, "*/15 * * * *", "factory", async () => {
     try {
       await runFactoryCycleNow({ includeNews: true });
@@ -44,7 +42,8 @@ function startCronJobs() {
     }
   });
 
-  scheduleSafe(liveCron, "*/5 * * * *", "live_monitor", async () => {
+  // Live cada 1 min: goles y tips al día (override CRON_LIVE_EXPRESSION).
+  scheduleSafe(liveCron, "*/1 * * * *", "live_monitor", async () => {
     try {
       await monitorLiveMatches();
     } catch (error) {
@@ -52,7 +51,7 @@ function startCronJobs() {
     }
   });
 
-  scheduleSafe(newsCron, "*/45 * * * *", "news", async () => {
+  scheduleSafe(newsCron, "*/30 * * * *", "news", async () => {
     try {
       await collectAndStoreSportsNews();
     } catch (error) {
@@ -60,8 +59,8 @@ function startCronJobs() {
     }
   });
 
-  const settleCron = process.env.CRON_SETTLE_EXPRESSION?.trim() || "*/12 * * * *";
-  scheduleSafe(settleCron, "*/12 * * * *", "pick_settlement", async () => {
+  const settleCron = process.env.CRON_SETTLE_EXPRESSION?.trim() || "*/3 * * * *";
+  scheduleSafe(settleCron, "*/3 * * * *", "pick_settlement", async () => {
     try {
       await settlePendingPickResultsOnce();
     } catch (error) {
@@ -69,8 +68,8 @@ function startCronJobs() {
     }
   });
 
-  const trackingCron = process.env.CRON_TRACKING_EXPRESSION?.trim() || "*/2 * * * *";
-  scheduleSafe(trackingCron, "*/2 * * * *", "prediction_tracking", async () => {
+  const trackingCron = process.env.CRON_TRACKING_EXPRESSION?.trim() || "* * * * *";
+  scheduleSafe(trackingCron, "* * * * *", "prediction_tracking", async () => {
     try {
       await runTrackingJobsOnce();
     } catch (error) {

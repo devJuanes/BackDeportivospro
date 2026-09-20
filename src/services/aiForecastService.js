@@ -233,27 +233,42 @@ function isAiLiveEnabled() {
 }
 
 function buildLivePrompt(match, heuristic) {
+  const hg = Number(match.homeGoals) || 0;
+  const ag = Number(match.awayGoals) || 0;
+  const minute = Number(match.minute) || 0;
+  const total = hg + ag;
+  const trailing =
+    hg === ag ? "empate" : hg > ag ? `${match.awayTeam} va perdiendo` : `${match.homeTeam} va perdiendo`;
+
   return [
-    "Eres analista EN VIVO de MatuPicks. Responde SOLO JSON válido sin markdown.",
-    "Lenguaje: tip/consejo informativo (Play Store safe). Sin CTAs de apuestas.",
-    "Datos del encuentro en curso:",
+    "Eres estratega EN VIVO de MatuPicks (servicio premium). Responde SOLO JSON válido sin markdown.",
+    "Objetivo: tip de ALTA CALIDAD para usuarios que pueden apostar — NO quemar su dinero con tips flojos.",
+    "Lenguaje: tip/consejo informativo (Play Store safe). Sin CTAs de casas de apuestas.",
+    "",
+    "CONTEXTO DEL PARTIDO:",
     JSON.stringify({
       deporte: match.sport || "football",
       liga: match.league || "",
       local: match.homeTeam,
       visitante: match.awayTeam,
-      marcador: `${match.homeGoals ?? 0}-${match.awayGoals ?? 0}`,
-      minuto_aprox: match.minute ?? 0,
+      marcador: `${hg}-${ag}`,
+      minuto_aprox: minute,
+      goles_totales: total,
+      situacion: trailing,
       estado_fuente: match.status_short || match.status || "",
     }),
     "",
-    `Sugerencia base del motor (ajústala o sustitúyela si ves mejor valor): "${heuristic.prediction}" (~${heuristic.confidence}% confianza).`,
+    `Sugerencia heurística (solo punto de partida; PUEDES descartarla): "${heuristic.prediction}" (~${heuristic.confidence}%).`,
     "",
-    "Devuelve UN tip en vivo con lectura del ritmo y del marcador.",
-    "NO uses Draw No Bet ni empate anulado. Prefiere: siguiente gol / over goles totales o resto / ambos marcan / córners o tiros si encaja.",
+    "ESTRATEGIA OBLIGATORIA (razona antes de elegir el tip):",
+    "1) Ritmo: ¿el marcador y el minuto justifican más goles, o partido cerrado?",
+    "2) Favorito vs underdog: si un grande/favorito va empatando o perdiendo, valora remonte o next goal — SOLO si el ritmo lo respalda.",
+    "3) NO digas siempre 'va a haber otro gol' solo porque van 1-0 o 2-0 al 70'. Eso es basura.",
+    "4) Prefiere mercados con lógica: next team to score, BTTS, over/under RESTANTE de goles, corners/cards solo si el contexto es claro.",
+    "5) Si NO hay edge claro → invalid_context true (mejor silencio que tip malo).",
+    "6) confidence conservadora: 58-78 tipico; >82 solo con evidencia fuerte del marcador+minuto.",
     "",
-    'Formato: { "pick": "texto corto", "confidence": 55-88, "analysis": "2-4 frases en español", "odds_hint": 1.5, "invalid_context": false }',
-    "Si el contexto es incoherente (ej. minuto 0 sin partido real) pon invalid_context true y pick vacío.",
+    'Formato: { "pick": "texto corto", "confidence": 55-85, "analysis": "2-4 frases: POR QUÉ (estrategia, no solo el marcador)", "odds_hint": 1.5, "invalid_context": false, "strategy_tag": "remonte|ritmo_abierto|favorito_presion|partido_cerrado|corners|otro" }',
   ].join("\n");
 }
 

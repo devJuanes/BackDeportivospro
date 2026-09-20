@@ -50,7 +50,11 @@ async function runFactoryMigrations() {
     "ALTER TABLE IF EXISTS news_articles ADD COLUMN IF NOT EXISTS matupicks_blog_kind TEXT;",
     "ALTER TABLE IF EXISTS news_articles ADD COLUMN IF NOT EXISTS matupicks_youtube_url TEXT;",
     "CREATE INDEX IF NOT EXISTS idx_news_matupicks_pick_kind ON news_articles(matupicks_pick_id, matupicks_blog_kind);",
-    "CREATE TABLE IF NOT EXISTS sports_news (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), title TEXT, summary TEXT NOT NULL DEFAULT '', url TEXT NOT NULL DEFAULT '#', image TEXT NOT NULL DEFAULT '', source TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW());",
+    "CREATE TABLE IF NOT EXISTS sports_news (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), title TEXT, summary TEXT NOT NULL DEFAULT '', content TEXT NOT NULL DEFAULT '', slug TEXT, url TEXT NOT NULL DEFAULT '#', external_source_url TEXT NOT NULL DEFAULT '', image TEXT NOT NULL DEFAULT '', source TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW());",
+    "ALTER TABLE IF EXISTS sports_news ADD COLUMN IF NOT EXISTS content TEXT NOT NULL DEFAULT '';",
+    "ALTER TABLE IF EXISTS sports_news ADD COLUMN IF NOT EXISTS slug TEXT;",
+    "ALTER TABLE IF EXISTS sports_news ADD COLUMN IF NOT EXISTS external_source_url TEXT NOT NULL DEFAULT '';",
+    "CREATE INDEX IF NOT EXISTS idx_sports_news_slug ON sports_news(slug);",
     "CREATE INDEX IF NOT EXISTS idx_sports_news_created_at ON sports_news(created_at DESC);",
     "ALTER TABLE IF EXISTS abetlive ADD COLUMN IF NOT EXISTS state TEXT NOT NULL DEFAULT 'live';",
     "ALTER TABLE IF EXISTS abetlive ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();",
@@ -135,6 +139,49 @@ async function runFactoryMigrations() {
       session_id UUID,
       model TEXT,
       payload JSONB,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );`,
+    // Engagement MatuPicks (likes / follows / comments / prefs)
+    `CREATE TABLE IF NOT EXISTS pf_prediction_likes (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL,
+      prediction_id TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(user_id, prediction_id)
+    );`,
+    `CREATE TABLE IF NOT EXISTS pf_prediction_follows (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL,
+      prediction_id TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(user_id, prediction_id)
+    );`,
+    `CREATE TABLE IF NOT EXISTS pf_prediction_comments (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL,
+      prediction_id TEXT NOT NULL,
+      user_name TEXT NOT NULL DEFAULT 'Usuario',
+      body TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );`,
+    "CREATE INDEX IF NOT EXISTS idx_pf_comments_prediction ON pf_prediction_comments(prediction_id, created_at DESC);",
+    `CREATE TABLE IF NOT EXISTS pf_notification_prefs (
+      user_id UUID PRIMARY KEY,
+      notif_live BOOLEAN NOT NULL DEFAULT TRUE,
+      notif_free BOOLEAN NOT NULL DEFAULT TRUE,
+      notif_vip BOOLEAN NOT NULL DEFAULT TRUE,
+      notif_news BOOLEAN NOT NULL DEFAULT FALSE,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );`,
+    `CREATE TABLE IF NOT EXISTS app_banners (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      title TEXT NOT NULL DEFAULT '',
+      subtitle TEXT NOT NULL DEFAULT '',
+      image_url TEXT NOT NULL DEFAULT '',
+      action_type TEXT NOT NULL DEFAULT 'none',
+      action_value TEXT NOT NULL DEFAULT '',
+      sort_order INT NOT NULL DEFAULT 0,
+      is_active BOOLEAN NOT NULL DEFAULT TRUE,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );`,
   ];
