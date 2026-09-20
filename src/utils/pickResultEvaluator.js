@@ -1,6 +1,8 @@
 /**
- * Evalúa resultado de un pick de fútbol vs marcador final (heurística sobre texto libre).
- * Devuelve won | lost | null (null = no auto-cerrar; revisión manual).
+ * Evalúa tip de fútbol vs marcador.
+ * - matchFinished=false → solo cierra si el resultado YA está decidido (early win/lose).
+ * - matchFinished=true → won/lost definitivos (o null si no se puede parsear).
+ * Devuelve won | lost | void | null.
  */
 
 function norm(value) {
@@ -18,9 +20,18 @@ function norm(value) {
  * @param {number} awayGoals
  * @param {string} homeName
  * @param {string} awayName
- * @returns {'won'|'lost'|null}
+ * @param {{ matchFinished?: boolean }} [opts]
+ * @returns {'won'|'lost'|'void'|null}
  */
-function evaluateFootballPickFromText(pickText, homeGoals, awayGoals, homeName, awayName) {
+function evaluateFootballPickFromText(
+  pickText,
+  homeGoals,
+  awayGoals,
+  homeName,
+  awayName,
+  opts = {}
+) {
+  const matchFinished = opts.matchFinished === true;
   const t = norm(pickText);
   const h = Number(homeGoals) || 0;
   const a = Number(awayGoals) || 0;
@@ -30,32 +41,46 @@ function evaluateFootballPickFromText(pickText, homeGoals, awayGoals, homeName, 
 
   if (!t) return null;
 
-  const overM = t.match(/(?:mas de|más de|over)\s+([\d,.]+)/);
+  const overM = t.match(/(?:mas de|más de|over)\s*\+?\s*([\d,.]+)/);
   if (overM) {
     const line = Number.parseFloat(overM[1].replace(",", "."));
     if (Number.isFinite(line)) {
-      return total > line ? "won" : "lost";
+      if (total > line) return "won";
+      if (matchFinished) return "lost";
+      return null;
     }
   }
 
-  const underM = t.match(/(?:menos de|under)\s+([\d,.]+)/);
+  const underM = t.match(/(?:menos de|under)\s*\+?\s*([\d,.]+)/);
   if (underM) {
     const line = Number.parseFloat(underM[1].replace(",", "."));
     if (Number.isFinite(line)) {
-      return total < line ? "won" : "lost";
+      if (total > line) return "lost";
+      if (matchFinished) return total < line ? "won" : "lost";
+      return null;
     }
   }
+
+  if (/ambos\s+marcan|btts|gg\b/.test(t)) {
+    const both = h > 0 && a > 0;
+    const wantsNo =
+      /\bno\b/.test(t.split(/ambos\s+marcan|btts/)[1] || "") ||
+      /ambos\s+marcan\s*:\s*no|btts\s*no|no\s+ambos/.test(t);
+    if (wantsNo) {
+      if (both) return "lost";
+      if (matchFinished) return "won";
+      return null;
+    }
+    if (both) return "won";
+    if (matchFinished) return "lost";
+    return null;
+  }
+
+  // Resto de mercados: solo al final del partido.
+  if (!matchFinished) return null;
 
   if (/\bempate\b|\bdraw\b/.test(t) && !/no\s+empate/.test(t)) {
     return h === a ? "won" : "lost";
-  }
-
-  if (/ambos\s+marcan/.test(t)) {
-    const both = h > 0 && a > 0;
-    if (/\bno\b/.test(t.split("ambos marcan")[1] || "") || /\bno\b/.test(t.slice(0, t.indexOf("ambos marcan")))) {
-      return !both ? "won" : "lost";
-    }
-    return both ? "won" : "lost";
   }
 
   if (/doble\s+oportunidad\s+1x|doble\s+chance\s+1x/.test(t)) {
@@ -73,7 +98,7 @@ function evaluateFootballPickFromText(pickText, homeGoals, awayGoals, homeName, 
   const mentionsHome = homeFrag && t.includes(homeFrag);
   const mentionsAway = awayFrag && t.includes(awayFrag);
 
-  const victoryCue = /victoria|gana|triunfo\s+de|wins?\b|mercado\s+1x2/.test(t);
+  const victoryCue = /victoria|gana|triunfo\s+de|wins?\b|mercado\s+1x2|siguiente gol/.test(t);
 
   if (victoryCue) {
     if (mentionsHome && !mentionsAway) {

@@ -1,50 +1,83 @@
 /**
- * Cierra automáticamente picks pendientes (won/lost) usando marcadores en caché + SoccersAPI.
+ * Cierra automáticamente picks pendientes (won/lost) y sincroniza marcador real.
+ * Usa fixtures en vivo + finalizados (caché ESPN + SoccersAPI).
  */
 const logger = require("../utils/logger");
 const { db } = require("../config/database");
 const { getFixturesByDateSport } = require("../models/fixtureModel");
 const { evaluateFootballPickFromText } = require("../utils/pickResultEvaluator");
 const { formatDateInTimezone } = require("../utils/helpers");
+const { normalizeTeamToken } = require("../utils/predictionDedupe");
+
+const FINISHED = new Set(["post", "final", "ft", "finished", "ended", "complete", "completed"]);
+const LIVE = new Set(["in", "live", "halftime", "ht", "1h", "2h"]);
 
 function teamsLikelyMatch(a, b) {
-  const x = String(a || "")
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "");
-  const y = String(b || "")
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "");
+  const x = normalizeTeamToken(a);
+  const y = normalizeTeamToken(b);
   if (!x || !y) return false;
   if (x === y) return true;
-  if (x.includes(y) || y.includes(x)) return true;
+  if (x.length >= 5 && y.length >= 5 && (x.includes(y) || y.includes(x))) return true;
   const wx = x.split(/\s+/).filter((w) => w.length > 3);
   const wy = y.split(/\s+/).filter((w) => w.length > 3);
-  return wx.some((xi) => wy.some((yi) => xi === yi));
+  if (wx.length === 0 || wy.length === 0) return false;
+  const overlap = wx.filter((xi) => wy.some((yi) => xi === yi || xi.includes(yi) || yi.includes(xi)));
+  return overlap.length >= Math.min(2, wx.length, wy.length) || (overlap.length >= 1 && Math.min(x.length, y.length) <= 10);
 }
 
 function mergePairKey(ta, tb) {
-  const x = String(ta || "").toLowerCase();
-  const y = String(tb || "").toLowerCase();
+  const x = normalizeTeamToken(ta);
+  const y = normalizeTeamToken(tb);
   return x <= y ? `${x}|${y}` : `${y}|${x}`;
 }
 
 function findFixtureRow(fixtures, homePick, awayPick) {
+  let best = null;
+  let bestScore = 0;
   for (const f of fixtures) {
     const fa = f.team_a;
     const fb = f.team_b;
-    if (
-      (teamsLikelyMatch(fa, homePick) && teamsLikelyMatch(fb, awayPick)) ||
-      (teamsLikelyMatch(fa, awayPick) && teamsLikelyMatch(fb, homePick))
-    ) {
-      return f;
+    const direct =
+      teamsLikelyMatch(fa, homePick) && teamsLikelyMatch(fb, awayPick);
+    const swapped =
+      teamsLikelyMatch(fa, awayPick) && teamsLikelyMatch(fb, homePick);
+    if (!direct && !swapped) continue;
+    const exact =
+      (normalizeTeamToken(fa) === normalizeTeamToken(homePick) &&
+        normalizeTeamToken(fb) === normalizeTeamToken(awayPick)) ||
+      (normalizeTeamToken(fa) === normalizeTeamToken(awayPick) &&
+        normalizeTeamToken(fb) === normalizeTeamToken(homePick));
+    const score = exact ? 3 : direct || swapped ? 1 : 0;
+    if (score > bestScore) {
+      bestScore = score;
+      best = { ...f, _swapped: swapped && !direct };
     }
   }
-  return null;
+  return best;
 }
 
-async function loadFinishedResultsForDate(dateIso) {
+function goalsFromFixture(fx) {
+  let hg = Number(fx.home_goals) || 0;
+  let ag = Number(fx.away_goals) || 0;
+  if (fx._swapped) {
+    const tmp = hg;
+    hg = ag;
+    ag = tmp;
+  }
+  return { hg, ag };
+}
+
+function isFinishedStatus(status) {
+  return FINISHED.has(String(status || "").toLowerCase());
+}
+
+function isLiveStatus(status) {
+  const s = String(status || "").toLowerCase();
+  return LIVE.has(s) || Number.isFinite(Number(status));
+}
+
+/** Fixtures del día: live + finalizados (para early settle + marcador). */
+async function loadResultsForDate(dateIso) {
   const byPair = new Map();
   let dbRows = [];
   try {
@@ -53,21 +86,34 @@ async function loadFinishedResultsForDate(dateIso) {
     logger.warn(`Settlement fixtures_cache ${dateIso}: ${error.message}`);
   }
 
-  const put = (ta, tb, hg, ag, source) => {
+  const put = (ta, tb, hg, ag, status, minute, source) => {
     const k = mergePairKey(ta, tb);
+    const prev = byPair.get(k);
+    const finished = isFinishedStatus(status);
+    const live = isLiveStatus(status);
+    if (!finished && !live && !(Number(hg) + Number(ag) > 0)) return;
+    // Preferir final > live; si mismo estado, el de más goles / minuto.
+    const rank = finished ? 3 : live ? 2 : 1;
+    const prevRank = prev ? (isFinishedStatus(prev.status) ? 3 : isLiveStatus(prev.status) ? 2 : 1) : 0;
+    if (prev && prevRank > rank) return;
+    if (prev && prevRank === rank) {
+      const prevTotal = (prev.home_goals || 0) + (prev.away_goals || 0);
+      const nextTotal = (Number(hg) || 0) + (Number(ag) || 0);
+      if (nextTotal < prevTotal) return;
+    }
     byPair.set(k, {
       team_a: ta,
       team_b: tb,
-      home_goals: hg,
-      away_goals: ag,
+      home_goals: Number(hg) || 0,
+      away_goals: Number(ag) || 0,
+      status: status || "pre",
+      minute: Number(minute) || 0,
       source,
     });
   };
 
-  const finishedStatuses = new Set(["post", "final", "ft", "finished", "ended", "complete", "completed"]);
   for (const f of dbRows) {
-    if (!finishedStatuses.has(String(f.status || "").toLowerCase())) continue;
-    put(f.team_a, f.team_b, Number(f.home_goals) || 0, Number(f.away_goals) || 0, "cache");
+    put(f.team_a, f.team_b, f.home_goals, f.away_goals, f.status, f.minute, "cache");
   }
 
   try {
@@ -75,8 +121,7 @@ async function loadFinishedResultsForDate(dateIso) {
     if (isConfigured()) {
       const soc = await getSoccersFootballFixturesForDate(dateIso);
       for (const s of soc) {
-        if (!finishedStatuses.has(String(s.status || "").toLowerCase())) continue;
-        put(s.homeTeam, s.awayTeam, Number(s.homeGoals) || 0, Number(s.awayGoals) || 0, "soccersapi");
+        put(s.homeTeam, s.awayTeam, s.homeGoals, s.awayGoals, s.status, s.minute, "soccersapi");
       }
     }
   } catch (error) {
@@ -87,23 +132,51 @@ async function loadFinishedResultsForDate(dateIso) {
 }
 
 async function settleRowsForTable(table, config) {
-  const { statusField, homeField, awayField, pickField, hasSport } = config;
-  const pendingVal = "pending";
+  const { statusField, homeField, awayField, pickField, hasSport, isLiveTable } = config;
 
   const selectCols = hasSport
-    ? `id, match_date, sport, ${homeField}, ${awayField}, ${pickField}`
-    : `id, match_date, ${homeField}, ${awayField}, ${pickField}`;
+    ? `id, match_date, sport, ${homeField}, ${awayField}, ${pickField}, ${statusField}, home_goals, away_goals, minute`
+    : `id, match_date, ${homeField}, ${awayField}, ${pickField}, ${statusField}, home_goals, away_goals, minute`;
 
-  const { data: picks, error } = await db.from(table).select(selectCols).eq(statusField, pendingVal).limit(280);
-
+  // Pendientes + ganados/perdidos sin marcador (reparar 0-0 inconsistente).
+  let picks = [];
+  let { data, error } = await db.from(table).select(selectCols).limit(400);
+  if (error) {
+    const msg = String(error.message || "").toLowerCase();
+    if (msg.includes("home_goals") || msg.includes("column")) {
+      const slimCols = hasSport
+        ? `id, match_date, sport, ${homeField}, ${awayField}, ${pickField}, ${statusField}`
+        : `id, match_date, ${homeField}, ${awayField}, ${pickField}, ${statusField}`;
+      const retry = await db.from(table).select(slimCols).limit(400);
+      data = retry.data;
+      error = retry.error;
+    }
+  }
   if (error) {
     const msg = String(error.message || "");
     if (!msg.includes("does not exist") && !msg.toLowerCase().includes("fetch failed")) {
       logger.warn(`Settlement lectura ${table}: ${msg}`);
     }
-    return { updated: 0 };
+    return { updated: 0, scored: 0 };
   }
-  if (!picks?.length) return { updated: 0 };
+
+  picks = (data || []).filter((p) => {
+    const st = String(p[statusField] || "pending").toLowerCase();
+    const hg = Number(p.home_goals) || 0;
+    const ag = Number(p.away_goals) || 0;
+    if (isLiveTable) {
+      if (p.live_ended === true) return false;
+      return st === "live" || st === "pending" || st === "won" || st === "lost";
+    }
+    if (st === "pending" || st === "live") return true;
+    // Reparar won/lost con marcador vacío (inconsistencia UI).
+    if ((st === "won" || st === "lost" || st === "ganada" || st === "perdida") && hg === 0 && ag === 0) {
+      return true;
+    }
+    return false;
+  });
+
+  if (!picks.length) return { updated: 0, scored: 0 };
 
   const byDate = new Map();
   for (const p of picks) {
@@ -111,20 +184,17 @@ async function settleRowsForTable(table, config) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) continue;
     if (hasSport) {
       const sp = String(p.sport || "football").toLowerCase();
-      // Por ahora el evaluador de texto es strong en football; otros deportes
-      // se liquidan si el fixture terminó y el tip es trivial pending→skip.
-      if (sp !== "football" && sp !== "soccer" && sp !== "basketball" && sp !== "hockey" && sp !== "tennis") {
-        continue;
-      }
+      if (sp && sp !== "football" && sp !== "soccer") continue;
     }
     if (!byDate.has(d)) byDate.set(d, []);
     byDate.get(d).push(p);
   }
 
   let updated = 0;
+  let scored = 0;
 
   for (const [dateIso, datePicks] of byDate) {
-    const results = await loadFinishedResultsForDate(dateIso);
+    const results = await loadResultsForDate(dateIso);
     if (results.length === 0) continue;
 
     for (const pick of datePicks) {
@@ -134,24 +204,59 @@ async function settleRowsForTable(table, config) {
       const fx = findFixtureRow(results, home, away);
       if (!fx) continue;
 
-      const outcome = evaluateFootballPickFromText(pickText, fx.home_goals, fx.away_goals, home, away);
-      if (!outcome) continue;
+      const { hg, ag } = goalsFromFixture(fx);
+      const finished = isFinishedStatus(fx.status);
+      const minute = Number(fx.minute) || 0;
+      const outcome = evaluateFootballPickFromText(pickText, hg, ag, home, away, {
+        matchFinished: finished,
+      });
 
-      const patch = { [statusField]: outcome, updated_at: new Date().toISOString() };
-      const u = await db.from(table).eq("id", pick.id).update(patch);
+      const patch = { updated_at: new Date().toISOString() };
+      patch.home_goals = hg;
+      patch.away_goals = ag;
+      if (minute > 0) patch.minute = minute;
+
+      const prevState = String(pick[statusField] || "pending").toLowerCase();
+      if (outcome === "won" || outcome === "lost" || outcome === "void") {
+        patch[statusField] = outcome;
+        if (isLiveTable) {
+          patch.outcome = outcome;
+          if (finished) {
+            patch.live_ended = true;
+            // Mantener estado won/lost visible (no "ended" opaco).
+            patch[statusField] = outcome;
+          }
+        }
+      } else if (isLiveTable && (finished || isLiveStatus(fx.status))) {
+        if (prevState !== "won" && prevState !== "lost") {
+          patch[statusField] = finished ? "pending" : "live";
+        }
+      }
+
+      let u = await db.from(table).eq("id", pick.id).update(patch);
+      if (u.error) {
+        const msg = String(u.error.message || "").toLowerCase();
+        if (msg.includes("home_goals") || msg.includes("minute") || msg.includes("column")) {
+          const slim = { updated_at: patch.updated_at };
+          if (patch[statusField]) slim[statusField] = patch[statusField];
+          if (patch.outcome) slim.outcome = patch.outcome;
+          u = await db.from(table).eq("id", pick.id).update(slim);
+        }
+      }
       if (u.error) {
         logger.warn(`Settlement update ${table} ${pick.id}: ${u.error.message}`);
         continue;
       }
-      updated += 1;
+      scored += 1;
+      if (patch[statusField] && patch[statusField] !== prevState) updated += 1;
     }
   }
 
-  return { updated };
+  return { updated, scored };
 }
 
 /**
- * Una pasada de liquidación — solo dp_predictions (API DeportivosPro).
+ * Una pasada de liquidación + sync de marcadores (planta + live + cola API).
  */
 async function settlePendingPickResultsOnce() {
   if (String(process.env.FACTORY_AUTO_SETTLE_ENABLED || "true").toLowerCase() === "false") {
@@ -183,13 +288,24 @@ async function settlePendingPickResultsOnce() {
       pickField: "prediction",
       hasSport: true,
     },
+    {
+      table: "abetlive",
+      statusField: "state",
+      homeField: "home_team_name",
+      awayField: "away_team_name",
+      pickField: "prediction",
+      hasSport: true,
+      isLiveTable: true,
+    },
   ];
 
   let total = 0;
+  let scored = 0;
   for (const c of configs) {
     try {
       const r = await settleRowsForTable(c.table, c);
       total += r.updated || 0;
+      scored += r.scored || 0;
     } catch (error) {
       const msg = String(error.message || "");
       if (!msg.includes("does not exist") && !msg.includes("fetch failed")) {
@@ -198,12 +314,17 @@ async function settlePendingPickResultsOnce() {
     }
   }
 
-  if (total > 0) {
-    logger.info(`[Settlement] picks actualizados: ${total}`);
+  if (total > 0 || scored > 0) {
+    logger.info(`[Settlement] estados=${total} marcadores=${scored}`);
   }
-  return { updated: total, today: formatDateInTimezone(new Date(), process.env.FACTORY_TIMEZONE || "America/Bogota") };
+  return {
+    updated: total,
+    scored,
+    today: formatDateInTimezone(new Date(), process.env.FACTORY_TIMEZONE || "America/Bogota"),
+  };
 }
 
 module.exports = {
   settlePendingPickResultsOnce,
+  loadResultsForDate,
 };

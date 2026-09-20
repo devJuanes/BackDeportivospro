@@ -170,15 +170,22 @@ async function existsRecentLivePrediction(payload, sinceIso) {
 
 async function getActiveLiveRows(limit = 120) {
   const today = todayLiveDate();
+  // Incluye tips early-won/lost aún sin live_ended para seguir sync de marcador.
   let { data, error } = await db
     .from("abetlive")
     .select("*")
-    .eq("state", "live")
+    .eq("match_date", today)
+    .eq("live_ended", false)
     .order("created_at", { ascending: false })
     .limit(limit);
 
   if (error) {
-    const fallback = await db.from("abetlive").select("*").order("created_at", { ascending: false }).limit(limit);
+    const fallback = await db
+      .from("abetlive")
+      .select("*")
+      .eq("state", "live")
+      .order("created_at", { ascending: false })
+      .limit(limit);
     data = fallback.data;
     error = fallback.error;
   }
@@ -188,8 +195,8 @@ async function getActiveLiveRows(limit = 120) {
 
   return (data || []).filter((row) => {
     if (row.live_ended === true) return false;
-    if (!isLiveState(row.state)) return false;
-    return true;
+    const st = String(row.state || "").toLowerCase();
+    return st === "live" || st === "won" || st === "lost" || st === "pending" || st === "void";
   });
 }
 
@@ -246,6 +253,7 @@ async function updateLiveScore(id, patchIn = {}, opts = {}) {
   if (patchIn.home_goals != null) patch.home_goals = Number(patchIn.home_goals) || 0;
   if (patchIn.away_goals != null) patch.away_goals = Number(patchIn.away_goals) || 0;
   if (patchIn.state) patch.state = patchIn.state;
+  if (patchIn.outcome != null) patch.outcome = patchIn.outcome;
   const rationale = opts.ai_rationale ?? patchIn.ai_rationale;
   if (rationale && patch.home_goals != null && patch.away_goals != null) {
     patch.ai_rationale = syncAnalysisScoreText(rationale, patch.home_goals, patch.away_goals);
@@ -258,6 +266,7 @@ async function updateLiveScore(id, patchIn = {}, opts = {}) {
       const slim = { updated_at: patch.updated_at };
       if (patch.minute != null) slim.minute = patch.minute;
       if (patch.state) slim.state = patch.state;
+      if (patch.outcome != null) slim.outcome = patch.outcome;
       await db.from("abetlive").eq("id", id).update(slim);
       return;
     }

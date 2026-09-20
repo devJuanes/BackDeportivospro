@@ -118,11 +118,12 @@ async function processLiveTrackingJob(job) {
         hg,
         ag,
         row.home_team_name,
-        row.away_team_name
+        row.away_team_name,
+        { matchFinished: true }
       ) || "pending";
     await finalizeLivePrediction(row.id, {
       outcome,
-      state: "ended",
+      state: outcome === "pending" ? "ended" : outcome,
       minute: Number(fixture.minute) || row.minute || 90,
       home_goals: hg,
       away_goals: ag,
@@ -150,11 +151,27 @@ async function processLiveTrackingJob(job) {
     return { updated: true, liveId: row.id, finished: true };
   }
 
+  const early = evaluateFootballPickFromText(
+    row.prediction,
+    hg,
+    ag,
+    row.home_team_name,
+    row.away_team_name,
+    { matchFinished: false }
+  );
+  const nextState =
+    early === "won" || early === "lost" || early === "void"
+      ? early
+      : isLive
+        ? "live"
+        : row.state;
+
   await updateLiveScore(row.id, {
     minute: Number(fixture.minute) || 0,
     home_goals: hg,
     away_goals: ag,
-    state: isLive ? "live" : row.state,
+    state: nextState,
+    outcome: early || row.outcome || null,
   });
 
   await db.from("dp_tracking_jobs").eq("id", job.id).update({
@@ -166,13 +183,14 @@ async function processLiveTrackingJob(job) {
       awayGoals: ag,
       minute: Number(fixture.minute) || 0,
       isLive,
+      outcome: early || null,
       fixtureStatus: fixture.status,
       checkedAt: now.toISOString(),
     },
     updated_at: now.toISOString(),
   });
 
-  return { updated: true, liveId: row.id };
+  return { updated: true, liveId: row.id, early: early || null };
 }
 
 async function processTrackingJob(job) {
@@ -214,13 +232,23 @@ async function processTrackingJob(job) {
   const status = String(fixture.status || "").toLowerCase();
   const isLive = status === "live" || status === "in" || Number(fixture.minute) > 0;
   const isFinished = ["post", "final", "ft", "finished"].includes(status);
+  const hg = Number(fixture.home_goals) || 0;
+  const ag = Number(fixture.away_goals) || 0;
+  const early = evaluateFootballPickFromText(
+    pred.prediction || pred.pick_text,
+    hg,
+    ag,
+    pred.home_team,
+    pred.away_team,
+    { matchFinished: isFinished }
+  );
 
   const livePatch = {
-    home_goals: Number(fixture.home_goals) || 0,
-    away_goals: Number(fixture.away_goals) || 0,
+    home_goals: hg,
+    away_goals: ag,
     minute: Number(fixture.minute) || 0,
-    is_live: isLive,
-    status: isFinished ? pred.status : isLive ? "live" : pred.status,
+    is_live: isLive && !early,
+    status: early || (isFinished ? pred.status : isLive ? "live" : pred.status),
   };
 
   await updatePredictionLiveData(pred.id, livePatch);

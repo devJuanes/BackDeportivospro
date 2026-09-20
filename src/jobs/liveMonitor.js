@@ -7,6 +7,7 @@ const { generateLiveSuggestion } = require("../services/predictionEngine");
 const { generateLiveInsightFromMatch } = require("../services/aiForecastService");
 const { getLiveMatchesBySport, getFactorySports } = require("../services/sportsService");
 const { runLiveLifecycleOnce } = require("../services/liveSettlementService");
+const { settlePendingPickResultsOnce } = require("../services/pickSettlementService");
 const { ensureLiveTrackingJob } = require("../models/dpPredictionModel");
 const { liveSignalDedupeKey } = require("../utils/predictionDedupe");
 const { enrichPickLogos } = require("../services/futboolLogoService");
@@ -86,6 +87,13 @@ async function monitorLiveMatches() {
     lifecycle = await runLiveLifecycleOnce(allLiveMatches);
   } catch (error) {
     logger.warn(`Live lifecycle omitido: ${error.message}`);
+  }
+
+  // Misma pasada: planta free/vip + repair marcador (cada minuto con el live).
+  try {
+    await settlePendingPickResultsOnce();
+  } catch (error) {
+    logger.warn(`Settlement en live omitido: ${error.message}`);
   }
 
   const activePairKeys = new Set(allLiveMatches.map((m) => `${m.homeTeam}|${m.awayTeam}`));

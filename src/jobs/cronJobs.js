@@ -59,8 +59,8 @@ function startCronJobs() {
     }
   });
 
-  const settleCron = process.env.CRON_SETTLE_EXPRESSION?.trim() || "*/3 * * * *";
-  scheduleSafe(settleCron, "*/3 * * * *", "pick_settlement", async () => {
+  const settleCron = process.env.CRON_SETTLE_EXPRESSION?.trim() || "*/1 * * * *";
+  scheduleSafe(settleCron, "*/1 * * * *", "pick_settlement", async () => {
     try {
       await settlePendingPickResultsOnce();
     } catch (error) {

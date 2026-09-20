@@ -102,7 +102,7 @@ async function completeTrackingJobsForLive(abetliveId) {
 /**
  * Evalúa outcome cuando hay marcador final; si no se puede inferir → pending.
  */
-function resolveOutcome(row, homeGoals, awayGoals) {
+function resolveOutcome(row, homeGoals, awayGoals, matchFinished = true) {
   const sport = String(row.sport || "football").toLowerCase();
   if (sport !== "football" && sport !== "soccer") {
     return "pending";
@@ -112,7 +112,8 @@ function resolveOutcome(row, homeGoals, awayGoals) {
     homeGoals,
     awayGoals,
     row.home_team_name,
-    row.away_team_name
+    row.away_team_name,
+    { matchFinished }
   );
   return evaluated || "pending";
 }
@@ -158,20 +159,46 @@ async function settleActiveLiveTips(activeLiveMatches = [], options = {}) {
     const liveHit = findLiveMatch(activeLiveMatches, home, away);
     if (liveHit) {
       try {
-        await updateLiveScore(row.id, {
-          minute: liveHit.minute,
-          home_goals: liveHit.homeGoals,
-          away_goals: liveHit.awayGoals,
-          state: "live",
-        }, { ai_rationale: row.ai_rationale });
+        const hg = Number(liveHit.homeGoals) || 0;
+        const ag = Number(liveHit.awayGoals) || 0;
+        const early = evaluateFootballPickFromText(
+          row.prediction,
+          hg,
+          ag,
+          home,
+          away,
+          { matchFinished: false }
+        );
+        const nextState =
+          early === "won" || early === "lost" || early === "void"
+            ? early
+            : row.state === "won" || row.state === "lost"
+              ? row.state
+              : "live";
+        await updateLiveScore(
+          row.id,
+          {
+            minute: liveHit.minute,
+            home_goals: hg,
+            away_goals: ag,
+            state: nextState,
+            outcome: early || row.outcome || null,
+          },
+          { ai_rationale: row.ai_rationale }
+        );
         await syncLinkedPrediction(row, {
-          finished: false,
-          homeGoals: liveHit.homeGoals,
-          awayGoals: liveHit.awayGoals,
+          finished: Boolean(early),
+          outcome: early || undefined,
+          homeGoals: hg,
+          awayGoals: ag,
           minute: liveHit.minute,
-          isLive: true,
+          isLive: !early,
         });
-        refreshed += 1;
+        if (early) {
+          settled += 1;
+        } else {
+          refreshed += 1;
+        }
       } catch (error) {
         logger.warn(`[live-settle] refresh ${row.id}: ${error.message}`);
       }
@@ -186,10 +213,11 @@ async function settleActiveLiveTips(activeLiveMatches = [], options = {}) {
     if (finished) {
       const hg = Number(fixture.home_goals) || 0;
       const ag = Number(fixture.away_goals) || 0;
-      const outcome = resolveOutcome(row, hg, ag);
+      const outcome = resolveOutcome(row, hg, ag, true);
+      const endState = outcome === "pending" ? "ended" : outcome;
       await finalizeLivePrediction(row.id, {
         outcome,
-        state: "ended",
+        state: endState,
         minute: Number(fixture.minute) || row.minute || 90,
         home_goals: hg,
         away_goals: ag,
