@@ -4,9 +4,50 @@ const { clamp } = require("../utils/helpers");
 const logger = require("../utils/logger");
 const { mergeDedupeByKey, normalizePickLabel } = require("../utils/predictionDedupe");
 const { buildPredictionSeo } = require("../utils/predictionSeo");
+const { scrubPlayStoreText, playStoreSystemGuard } = require("../utils/playStoreSafe");
+const {
+  runAgentPickPipeline,
+  isAgentModeEnabled,
+  SPORT_MARKET_HINTS,
+} = require("./predictionAgentService");
+const { resolveTeamLogoUrl } = require("./futboolLogoService");
+const {
+  filterFixturesForTips,
+  passesQualityGate,
+} = require("../utils/fixtureQuality");
 
 function isAiEnabled() {
-  return process.env.FACTORY_AI_ENABLED === "true";
+  if (process.env.FACTORY_AI_ENABLED !== "true") return false;
+  const cfg = getAiProviderConfig();
+  return Boolean(cfg.apiKey);
+}
+
+function getAiProviderConfig() {
+  const provider = String(process.env.FACTORY_AI_PROVIDER || "").trim().toLowerCase();
+  const minimaxKey = String(process.env.MINIMAX_API_KEY || "").trim();
+  const factoryKey = String(process.env.FACTORY_AI_API_KEY || "").trim();
+  const useMinimax =
+    provider === "minimax" ||
+    (Boolean(minimaxKey) && provider !== "deepseek");
+
+  if (useMinimax) {
+    return {
+      provider: "minimax",
+      url: (process.env.FACTORY_AI_BASE_URL || "https://api.minimax.io/v1").replace(/\/$/, ""),
+      apiKey: minimaxKey || factoryKey,
+      model:
+        process.env.MINIMAX_MODEL ||
+        process.env.FACTORY_AI_MODEL ||
+        "MiniMax-M2.5",
+    };
+  }
+
+  return {
+    provider: "openai-compatible",
+    url: (process.env.FACTORY_AI_BASE_URL || "https://api.deepseek.com").replace(/\/$/, ""),
+    apiKey: factoryKey,
+    model: process.env.FACTORY_AI_MODEL || "deepseek-chat",
+  };
 }
 
 function delay(ms) {
@@ -35,9 +76,19 @@ function looksLikeDrawNoBet(pick = "") {
 }
 
 function sanitizePick(pick, tier, fixture) {
-  const raw = String(pick || "").trim();
+  const raw = scrubPlayStoreText(pick);
   if (!raw || looksLikeDrawNoBet(raw)) {
     const home = fixture?.homeTeam || "local";
+    const sport = String(fixture?.sport || "football").toLowerCase();
+    if (sport === "basketball") {
+      return tier === "vip" ? "Local -2.5 handicap" : "Más de 159.5 puntos";
+    }
+    if (sport === "tennis") {
+      return tier === "vip" ? "Ganador 2-0 sets" : "Más de 20.5 games";
+    }
+    if (sport === "hockey") {
+      return tier === "vip" ? "Más de 5.5 goles" : "Más de 4.5 goles";
+    }
     return tier === "vip"
       ? `Victoria ${home} — mercado 1X2`
       : "Más de 1.5 goles";
@@ -47,14 +98,16 @@ function sanitizePick(pick, tier, fixture) {
 
 function buildPrompt(fixture) {
   const marketsPerMatch = Number.parseInt(process.env.FACTORY_MARKETS_PER_MATCH || "1", 10);
+  const sport = String(fixture.sport || "football").toLowerCase();
+  const marketHints = SPORT_MARKET_HINTS[sport] || SPORT_MARKET_HINTS.football;
   return [
-    "Eres un analista deportivo experto.",
-    "Debes responder SOLO JSON válido sin markdown.",
-    `Genera ${marketsPerMatch} pronósticos FREE y ${marketsPerMatch} VIP para el partido.`,
-    "Usa mercados distintos y racionales para cada lista.",
-    "Mercados con valor: 1X2 (local/visitante/empate explícito), hándicap asiático, over/under goles (líneas claras), ambos marcan, córners/tarjetas, combinadas justificadas.",
-    "NO uses Draw No Bet, empate anulado ni variantes DNB: son cuotas planas y bajo valor percibido; el usuario espera picks con más upside.",
-    "Incluye SEO orientado a búsquedas en Google.",
+    "Eres analista senior de MatuPicks. Responde SOLO JSON válido sin markdown.",
+    `Genera hasta ${marketsPerMatch} tip(s) FREE y hasta ${marketsPerMatch} VIP (calidad > cantidad).`,
+    "Si no hay edge claro, free/vip = []. No inventes tips genéricos.",
+    "Cada tip con análisis concreto (estilo, ritmo, motivación, riesgos).",
+    `Mercados: ${marketHints}`,
+    "NO uses Draw No Bet ni DNB. Lenguaje Play Store safe (tips/consejos; nunca CTAs de apuestas).",
+    "Confidence realista (free 62-78, vip 74-90). VIP distinto y con más edge que FREE.",
     "",
     `Partido: ${fixture.homeTeam} vs ${fixture.awayTeam}`,
     `Liga: ${fixture.league}`,
@@ -62,17 +115,16 @@ function buildPrompt(fixture) {
     `Fecha: ${fixture.match_date}`,
     `Hora: ${fixture.match_hour}`,
     "",
-    "Formato exacto JSON:",
-    '{ "free": [ { "pick": "...", "confidence": 0-100, "analysis": "...", "seo_title": "...", "seo_description": "..." } ],',
-    '  "vip": [ { "pick": "...", "confidence": 0-100, "analysis": "...", "seo_title": "...", "seo_description": "..." } ] }',
+    'Formato: { "free": [{ "pick": "...", "confidence": 0-100, "analysis": "3-5 frases" }],',
+    '  "vip": [{ "pick": "...", "confidence": 0-100, "analysis": "3-5 frases" }] }',
   ].join("\n");
 }
 
 function toPredictionRecord(fixture, tier, aiData, index = 0) {
-  const confidenceBase = tier === "vip" ? 72 : 62;
+  const confidenceBase = tier === "vip" ? 74 : 64;
   const confidence = clamp(
     Number.isFinite(aiData?.confidence) ? Number(aiData.confidence) : confidenceBase,
-    tier === "vip" ? 65 : 55,
+    tier === "vip" ? 70 : 60,
     tier === "vip" ? 93 : 82
   );
   const homeName = fixture?.homeTeam || "local";
@@ -89,21 +141,31 @@ function toPredictionRecord(fixture, tier, aiData, index = 0) {
     date: fixture.match_date,
     tier,
   });
+  const analysis = scrubPlayStoreText(
+    aiData?.analysis ||
+      `${tier.toUpperCase()}: tip informativo generado por motor IA MatuPicks.`
+  );
   return {
     sport: fixture.sport,
     league: fixture.league,
-    homeTeam: { name: fixture.homeTeam, logo: "" },
-    awayTeam: { name: fixture.awayTeam, logo: "" },
+    homeTeam: {
+      name: fixture.homeTeam,
+      logo: resolveTeamLogoUrl(fixture.homeTeam, fixture.league),
+    },
+    awayTeam: {
+      name: fixture.awayTeam,
+      logo: resolveTeamLogoUrl(fixture.awayTeam, fixture.league),
+    },
     prediction: pick,
     confidence,
     probability: clamp(confidence + (tier === "vip" ? 3 : 5), 50, 97),
     odds: estimateOddsFromConfidence(confidence),
     date: fixture.match_date,
     hours: fixture.match_hour,
-    source: "ai-engine",
-    analysis: aiData?.analysis || `${tier.toUpperCase()}: predicción generada por motor propio IA + reglas.`,
-    seo_title: seo.seo_title,
-    seo_description: seo.seo_description,
+    source: `${getAiProviderConfig().provider}-ai`,
+    analysis,
+    seo_title: scrubPlayStoreText(seo.seo_title),
+    seo_description: scrubPlayStoreText(seo.seo_description),
     slug: toSlug(`${fixture.match_date}-${fixture.homeTeam}-vs-${fixture.awayTeam}-${tier}-${index + 1}`),
   };
 }
@@ -128,39 +190,38 @@ function parseModelJson(content) {
  * @param {{ timeoutMs?: number }} [opts]  timeout por petición (p. ej. previas largas vía `BLOG_AI_TIMEOUT_MS`).
  */
 async function callChatModel(prompt, systemOverride, opts = {}) {
-  const url = process.env.FACTORY_AI_BASE_URL || "https://api.deepseek.com";
-  const apiKey = process.env.FACTORY_AI_API_KEY;
-  const model = process.env.FACTORY_AI_MODEL || "deepseek-chat";
+  const cfg = getAiProviderConfig();
+  const apiKey = cfg.apiKey;
+  const model = cfg.model;
   if (!apiKey) {
-    throw new Error("FACTORY_AI_API_KEY no configurada");
+    throw new Error("Configura MINIMAX_API_KEY o FACTORY_AI_API_KEY");
   }
   const system =
     typeof systemOverride === "string" && systemOverride.trim()
       ? systemOverride.trim()
-      : "Responde solo JSON válido.";
+      : playStoreSystemGuard();
   const defaultMs = Number.parseInt(process.env.FACTORY_AI_TIMEOUT_MS || "12000", 10);
   const timeout =
     typeof opts.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
       ? Math.max(1000, opts.timeoutMs)
       : defaultMs;
-  const { data } = await axios.post(
-    `${url}/v1/chat/completions`,
-    {
-      model,
-      temperature: 0.2,
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: prompt },
-      ],
+
+  const body = {
+    model,
+    temperature: cfg.provider === "minimax" ? 0.3 : 0.2,
+    messages: [
+      { role: "system", content: system },
+      { role: "user", content: prompt },
+    ],
+  };
+
+  const { data } = await axios.post(`${cfg.url}/chat/completions`, body, {
+    timeout,
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
     },
-    {
-      timeout,
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-    }
-  );
+  });
   const content = data?.choices?.[0]?.message?.content;
   if (!content) throw new Error("Respuesta IA vacía");
   return parseModelJson(content);
@@ -173,7 +234,8 @@ function isAiLiveEnabled() {
 
 function buildLivePrompt(match, heuristic) {
   return [
-    "Eres trader deportivo EN VIVO. Responde SOLO JSON válido sin markdown.",
+    "Eres analista EN VIVO de MatuPicks. Responde SOLO JSON válido sin markdown.",
+    "Lenguaje: tip/consejo informativo (Play Store safe). Sin CTAs de apuestas.",
     "Datos del encuentro en curso:",
     JSON.stringify({
       deporte: match.sport || "football",
@@ -187,8 +249,8 @@ function buildLivePrompt(match, heuristic) {
     "",
     `Sugerencia base del motor (ajústala o sustitúyela si ves mejor valor): "${heuristic.prediction}" (~${heuristic.confidence}% confianza).`,
     "",
-    "Devuelve UN pick accionable en vivo con lectura del ritmo y del marcador.",
-    "NO uses Draw No Bet ni empate anulado. Prefiere: siguiente gol / over goles totales o resto del partido / ambos marcan (resto o total) / córners o tiros si encaja.",
+    "Devuelve UN tip en vivo con lectura del ritmo y del marcador.",
+    "NO uses Draw No Bet ni empate anulado. Prefiere: siguiente gol / over goles totales o resto / ambos marcan / córners o tiros si encaja.",
     "",
     'Formato: { "pick": "texto corto", "confidence": 55-88, "analysis": "2-4 frases en español", "odds_hint": 1.5, "invalid_context": false }',
     "Si el contexto es incoherente (ej. minuto 0 sin partido real) pon invalid_context true y pick vacío.",
@@ -220,9 +282,10 @@ async function generateLiveInsightFromMatch(match, heuristicSuggestion) {
       Number.isFinite(Number(raw.odds_hint)) && Number(raw.odds_hint) > 1
         ? Number(Number(raw.odds_hint).toFixed(2))
         : heuristicSuggestion.odds;
-    const analysis =
+    const analysis = scrubPlayStoreText(
       String(raw.analysis || "").trim() ||
-      `Lectura en vivo ${match.homeTeam} vs ${match.awayTeam}: ${pick}.`;
+        `Lectura en vivo ${match.homeTeam} vs ${match.awayTeam}: ${pick}.`
+    );
     return {
       pick,
       confidence,
@@ -238,13 +301,19 @@ async function generateLiveInsightFromMatch(match, heuristicSuggestion) {
 
 async function generateAiPredictionsFromFixtures(fixtures = [], opts = {}) {
   if (!isAiEnabled()) return { free: [], vip: [] };
+
+  /** Modo agente (default): research local → analysis+pick Minimax → listo para planta. */
+  if (isAgentModeEnabled()) {
+    return runAgentPickPipeline(fixtures, callChatModel, opts);
+  }
+
   const envLimit = Number.parseInt(process.env.FACTORY_AI_MATCH_LIMIT || "20", 10);
   const override = opts.matchLimit;
   const limit =
     typeof override === "number" && Number.isFinite(override)
       ? Math.max(1, Math.floor(override))
       : Math.max(1, envLimit);
-  const selected = fixtures.slice(0, limit);
+  const selected = filterFixturesForTips(fixtures, { allowLive: false }).slice(0, limit);
   const marketsPerMatch = Number.parseInt(process.env.FACTORY_MARKETS_PER_MATCH || "1", 10);
   const gapMs = Number.parseInt(process.env.FACTORY_AI_DELAY_MS || "2500", 10);
   const free = [];
@@ -256,10 +325,12 @@ async function generateAiPredictionsFromFixtures(fixtures = [], opts = {}) {
       const freeRows = Array.isArray(aiJson?.free) ? aiJson.free : aiJson?.free ? [aiJson.free] : [];
       const vipRows = Array.isArray(aiJson?.vip) ? aiJson.vip : aiJson?.vip ? [aiJson.vip] : [];
       freeRows.slice(0, Math.max(1, marketsPerMatch)).forEach((row, idx) => {
-        free.push(toPredictionRecord(fixture, "free", row, idx));
+        const rec = toPredictionRecord(fixture, "free", row, idx);
+        if (passesQualityGate(rec, "free")) free.push(rec);
       });
       vipRows.slice(0, Math.max(1, marketsPerMatch)).forEach((row, idx) => {
-        vip.push(toPredictionRecord(fixture, "vip", row, idx));
+        const rec = toPredictionRecord(fixture, "vip", row, idx);
+        if (passesQualityGate(rec, "vip")) vip.push(rec);
       });
     } catch (error) {
       logger.warn(`IA falló para ${fixture.homeTeam} vs ${fixture.awayTeam}: ${error.message}`);
@@ -288,4 +359,6 @@ module.exports = {
   generateLiveInsightFromMatch,
   isAiEnabled,
   isAiLiveEnabled,
+  getAiProviderConfig,
+  isAgentModeEnabled,
 };

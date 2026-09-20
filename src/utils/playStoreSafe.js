@@ -1,0 +1,52 @@
+/**
+ * Play Store–safe copy: tips / consejos / pronósticos informativos.
+ * Never surface gambling-house CTAs or "apuestas" product language in user-facing text.
+ * Technical odds fields may remain for math elsewhere.
+ */
+
+const BANNED_PHRASE_REPLACEMENTS = [
+  [/casas?\s+de\s+apuestas?/gi, "fuentes de cuotas"],
+  [/casa\s+de\s+apuestas?/gi, "fuente de cuotas"],
+  [/\bapuestas?\b/gi, "pronósticos"],
+  [/\bbetting\b/gi, "tips"],
+  [/\bgambling\b/gi, "análisis"],
+  [/\bbet\s+now\b/gi, "ver tip"],
+  [/\bplace\s+your\s+bet\b/gi, "consulta el tip"],
+  [/\bbankroll\b/gi, "gestión"],
+  [/\bstake\b/gi, "selección"],
+  [/disciplina\s+de\s+banca/gi, "filtro de calidad"],
+  [/valor\s+de\s+cuota\s+para\s+apostar/gi, "lectura de cuota implícita"],
+];
+
+/** Elimina caracteres CJK (chino/japonés/coreano) del texto visible. */
+function stripCjkText(value = "") {
+  return String(value || "")
+    .replace(/[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function scrubPlayStoreText(value = "") {
+  let out = stripCjkText(String(value || ""));
+  for (const [pattern, replacement] of BANNED_PHRASE_REPLACEMENTS) {
+    out = out.replace(pattern, replacement);
+  }
+  return out.replace(/\s+/g, " ").trim();
+}
+
+function playStoreSystemGuard() {
+  return [
+    "Eres analista deportivo de MatuPicks.",
+    "Lenguaje Play Store safe: usa tips, consejos o pronósticos informativos.",
+    "NUNCA uses: apuestas, casino, casa de apuestas, betting CTA, gana dinero, asegurado.",
+    "Puedes mencionar cuotas solo como dato matemático/contexto, no como producto de juego.",
+    "Responde solo JSON válido en español latinoamericano.",
+    "NUNCA uses caracteres chinos, japoneses ni coreanos. Solo español latinoamericano.",
+  ].join(" ");
+}
+
+module.exports = {
+  scrubPlayStoreText,
+  playStoreSystemGuard,
+  stripCjkText,
+};

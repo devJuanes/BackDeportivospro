@@ -30,11 +30,12 @@ async function runFactoryMigrations() {
     "DELETE FROM news_articles WHERE id IN (SELECT id FROM (SELECT id, ROW_NUMBER() OVER (PARTITION BY slug ORDER BY published_at DESC) AS rn FROM news_articles WHERE slug IS NOT NULL AND slug <> '') t WHERE rn > 1);",
     "DELETE FROM free_picks WHERE id IN (SELECT id FROM (SELECT id, ROW_NUMBER() OVER (PARTITION BY match_date, team_a, team_b, pick_text ORDER BY created_at DESC) AS rn FROM free_picks) t WHERE rn > 1);",
     "DELETE FROM vip_picks WHERE id IN (SELECT id FROM (SELECT id, ROW_NUMBER() OVER (PARTITION BY match_date, team_a, team_b, pick_text ORDER BY created_at DESC) AS rn FROM vip_picks) t WHERE rn > 1);",
-    "ALTER TABLE pf_users ADD COLUMN IF NOT EXISTS vip_expires_at TIMESTAMPTZ;",
-    "ALTER TABLE pf_users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT FALSE;",
-    "ALTER TABLE pf_users ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMPTZ;",
-    "ALTER TABLE pf_users ADD COLUMN IF NOT EXISTS vip_trial_claimed_at TIMESTAMPTZ;",
-    "ALTER TABLE pf_users ADD COLUMN IF NOT EXISTS phone TEXT;",
+    "CREATE TABLE IF NOT EXISTS pf_users (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), name TEXT NOT NULL DEFAULT 'Usuario', email TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL DEFAULT '__matudb_auth__', is_vip BOOLEAN NOT NULL DEFAULT FALSE, vip_expires_at TIMESTAMPTZ, is_admin BOOLEAN NOT NULL DEFAULT FALSE, is_active BOOLEAN NOT NULL DEFAULT TRUE, email_verified_at TIMESTAMPTZ, vip_trial_claimed_at TIMESTAMPTZ, phone TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW());",
+    "ALTER TABLE IF EXISTS pf_users ADD COLUMN IF NOT EXISTS vip_expires_at TIMESTAMPTZ;",
+    "ALTER TABLE IF EXISTS pf_users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT FALSE;",
+    "ALTER TABLE IF EXISTS pf_users ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMPTZ;",
+    "ALTER TABLE IF EXISTS pf_users ADD COLUMN IF NOT EXISTS vip_trial_claimed_at TIMESTAMPTZ;",
+    "ALTER TABLE IF EXISTS pf_users ADD COLUMN IF NOT EXISTS phone TEXT;",
     "CREATE INDEX IF NOT EXISTS idx_pf_users_phone ON pf_users(phone);",
     "CREATE TABLE IF NOT EXISTS pf_email_otps (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), email TEXT NOT NULL, code_hash TEXT NOT NULL, expires_at TIMESTAMPTZ NOT NULL, attempts INT NOT NULL DEFAULT 0, consumed_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());",
     "CREATE INDEX IF NOT EXISTS idx_pf_email_otps_email_created ON pf_email_otps(email, created_at DESC);",
@@ -51,13 +52,105 @@ async function runFactoryMigrations() {
     "CREATE INDEX IF NOT EXISTS idx_news_matupicks_pick_kind ON news_articles(matupicks_pick_id, matupicks_blog_kind);",
     "CREATE TABLE IF NOT EXISTS sports_news (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), title TEXT, summary TEXT NOT NULL DEFAULT '', url TEXT NOT NULL DEFAULT '#', image TEXT NOT NULL DEFAULT '', source TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW());",
     "CREATE INDEX IF NOT EXISTS idx_sports_news_created_at ON sports_news(created_at DESC);",
+    "ALTER TABLE IF EXISTS abetlive ADD COLUMN IF NOT EXISTS state TEXT NOT NULL DEFAULT 'live';",
+    "ALTER TABLE IF EXISTS abetlive ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();",
+    "ALTER TABLE IF EXISTS abetlive ADD COLUMN IF NOT EXISTS ai_rationale TEXT;",
+    "ALTER TABLE IF EXISTS abetlive ADD COLUMN IF NOT EXISTS outcome TEXT;",
+    "ALTER TABLE IF EXISTS abetlive ADD COLUMN IF NOT EXISTS match_date DATE;",
+    "ALTER TABLE IF EXISTS abetlive ADD COLUMN IF NOT EXISTS live_ended BOOLEAN NOT NULL DEFAULT FALSE;",
+    "ALTER TABLE IF EXISTS abetlive ADD COLUMN IF NOT EXISTS home_goals INTEGER NOT NULL DEFAULT 0;",
+    "ALTER TABLE IF EXISTS abetlive ADD COLUMN IF NOT EXISTS away_goals INTEGER NOT NULL DEFAULT 0;",
+    "ALTER TABLE IF EXISTS abetlive ADD COLUMN IF NOT EXISTS prediction_id UUID;",
+    "ALTER TABLE IF EXISTS abetlive ADD COLUMN IF NOT EXISTS home_team_logo TEXT NOT NULL DEFAULT '';",
+    "ALTER TABLE IF EXISTS abetlive ADD COLUMN IF NOT EXISTS away_team_logo TEXT NOT NULL DEFAULT '';",
+    "ALTER TABLE IF EXISTS abet ADD COLUMN IF NOT EXISTS home_team_logo TEXT NOT NULL DEFAULT '';",
+    "ALTER TABLE IF EXISTS abet ADD COLUMN IF NOT EXISTS away_team_logo TEXT NOT NULL DEFAULT '';",
+    "ALTER TABLE IF EXISTS abetvip ADD COLUMN IF NOT EXISTS home_team_logo TEXT NOT NULL DEFAULT '';",
+    "ALTER TABLE IF EXISTS abetvip ADD COLUMN IF NOT EXISTS away_team_logo TEXT NOT NULL DEFAULT '';",
+    `CREATE TABLE IF NOT EXISTS factory_run_lock (
+      lock_key TEXT PRIMARY KEY,
+      holder TEXT NOT NULL,
+      acquired_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      expires_at TIMESTAMPTZ NOT NULL
+    );`,
+    "CREATE INDEX IF NOT EXISTS idx_abetlive_match_date ON abetlive(match_date DESC);",
+    "CREATE INDEX IF NOT EXISTS idx_abetlive_state_date ON abetlive(state, match_date);",
+    "ALTER TABLE IF EXISTS dp_tracking_jobs ADD COLUMN IF NOT EXISTS abetlive_id UUID;",
+    "ALTER TABLE IF EXISTS dp_tracking_jobs ALTER COLUMN prediction_id DROP NOT NULL;",
+    "CREATE INDEX IF NOT EXISTS idx_dp_tracking_abetlive ON dp_tracking_jobs(abetlive_id);",
+    // Trip / Escalera (MatuPicks)
+    `CREATE TABLE IF NOT EXISTS ladder_sessions (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL,
+      capital_initial NUMERIC(12,2) NOT NULL DEFAULT 100,
+      capital_current NUMERIC(12,2) NOT NULL DEFAULT 100,
+      daily_target NUMERIC(12,2) NOT NULL DEFAULT 20,
+      multiplier_mode TEXT NOT NULL DEFAULT 'auto',
+      status TEXT NOT NULL DEFAULT 'open',
+      notes TEXT,
+      steps_won INT NOT NULL DEFAULT 0,
+      steps_lost INT NOT NULL DEFAULT 0,
+      steps_total INT NOT NULL DEFAULT 0,
+      opened_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      closed_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );`,
+    "CREATE INDEX IF NOT EXISTS idx_ladder_sessions_user_status ON ladder_sessions(user_id, status);",
+    "CREATE INDEX IF NOT EXISTS idx_ladder_sessions_opened_at ON ladder_sessions(opened_at DESC);",
+    `CREATE TABLE IF NOT EXISTS ladder_steps (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      session_id UUID NOT NULL,
+      step_index INT NOT NULL DEFAULT 1,
+      status TEXT NOT NULL DEFAULT 'pending',
+      prediction_source TEXT,
+      prediction_ref_id TEXT,
+      prediction_payload JSONB,
+      recommended_stake NUMERIC(12,2),
+      recommended_odds NUMERIC(10,2),
+      stake_actual NUMERIC(12,2),
+      executed_odds NUMERIC(10,2),
+      rationale TEXT,
+      confidence NUMERIC(5,2),
+      profit_loss NUMERIC(12,2),
+      balance_after NUMERIC(12,2),
+      decided_at TIMESTAMPTZ,
+      resolved_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );`,
+    "CREATE INDEX IF NOT EXISTS idx_ladder_steps_session ON ladder_steps(session_id, step_index DESC);",
+    "CREATE INDEX IF NOT EXISTS idx_ladder_steps_status ON ladder_steps(session_id, status);",
+    `CREATE TABLE IF NOT EXISTS ladder_events (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      session_id UUID,
+      step_id UUID,
+      event_type TEXT NOT NULL,
+      payload JSONB,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );`,
+    `CREATE TABLE IF NOT EXISTS ladder_recommendations (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      step_id UUID,
+      session_id UUID,
+      model TEXT,
+      payload JSONB,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );`,
   ];
 
   for (const sql of statements) {
     try {
       await executeRawSql(sql);
     } catch (error) {
-      logger.warn(`Migración no aplicada (${sql}): ${error.message}`);
+      const msg = String(error.message || "");
+      const skip =
+        msg.includes("already exists") ||
+        msg.includes("duplicate") ||
+        msg.includes("does not exist");
+      if (!skip) {
+        logger.warn(`Migración no aplicada (${sql.slice(0, 80)}…): ${msg}`);
+      }
     }
   }
 }

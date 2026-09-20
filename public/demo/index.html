@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DeportivosPro API — Demo</title>
+  <style>
+    :root {
+      --bg: #0b1220; --card: #141f33; --accent: #22c55e; --vip: #f59e0b;
+      --text: #e8eef8; --muted: #8fa3bf; --border: #243552;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; font-family: system-ui, sans-serif;
+      background: linear-gradient(160deg, #0b1220, #101a2e 50%, #0d1528);
+      color: var(--text); min-height: 100vh;
+    }
+    header { padding: 1.5rem 1rem; text-align: center; border-bottom: 1px solid var(--border); }
+    header h1 { margin: 0 0 .25rem; font-size: 1.5rem; }
+    header p { margin: 0; color: var(--muted); font-size: .9rem; }
+    .toolbar { display: flex; flex-wrap: wrap; gap: .5rem; justify-content: center; padding: 1rem; max-width: 1100px; margin: 0 auto; }
+    button { background: var(--card); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: .5rem .75rem; cursor: pointer; }
+    button.active { border-color: var(--accent); color: var(--accent); }
+    button.primary { background: #166534; border-color: #22c55e; color: #ecfdf5; font-weight: 600; }
+    button.primary:disabled { opacity: .6; cursor: wait; }
+    button.primary:hover:not(:disabled) { background: #15803d; }
+    .section { max-width: 1100px; margin: 0 auto 1.5rem; padding: 0 1rem; }
+    .section h2 { font-size: 1rem; color: var(--muted); margin: 0 0 .75rem; display: flex; align-items: center; gap: .5rem; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 1rem; }
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 1rem; display: flex; flex-direction: column; gap: .5rem; }
+    .card.live { border-color: #ef4444; box-shadow: 0 0 0 1px rgba(239,68,68,.3); }
+    .card.finished { opacity: .75; }
+    .card.top { border-color: #f472b6; }
+    .badges { display: flex; gap: .35rem; flex-wrap: wrap; }
+    .tier, .phase { font-size: .65rem; font-weight: 700; text-transform: uppercase; padding: .2rem .5rem; border-radius: 999px; }
+    .tier-free { background: #1e3a2f; color: #4ade80; }
+    .tier-vip, .tier-premium { background: #3b2a10; color: var(--vip); }
+    .tier-super, .tier-top { background: #3b1030; color: #f472b6; }
+    .phase-live { background: #3f1212; color: #f87171; }
+    .phase-upcoming { background: #1e293b; color: #93c5fd; }
+    .phase-finished { background: #1f2937; color: #9ca3af; }
+    .teams { font-size: 1.05rem; font-weight: 700; }
+    .pick { color: var(--accent); font-weight: 600; }
+    .analysis { font-size: .82rem; color: var(--muted); line-height: 1.4; }
+    .meta { color: var(--muted); font-size: .85rem; display: flex; gap: .75rem; flex-wrap: wrap; }
+    .star { align-self: flex-start; background: transparent; border: none; font-size: 1.2rem; padding: 0; cursor: pointer; }
+    .star.on { color: #fbbf24; }
+    pre.json { background: #0a101c; border: 1px solid var(--border); border-radius: 10px; padding: 1rem; margin: 1rem auto 2rem; max-width: 1100px; overflow: auto; font-size: .75rem; color: #a5f3fc; }
+    .empty, .error { text-align: center; padding: 2rem; color: var(--muted); }
+    .error { color: #f87171; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>⚽ DeportivosPro API</h1>
+    <p>Ordenado por fecha/hora · En vivo · Top · Finalizados</p>
+  </header>
+  <div class="toolbar">
+    <button class="tier-btn active" data-tier="">Todos</button>
+    <button class="tier-btn" data-tier="free">Free</button>
+    <button class="tier-btn" data-tier="premium">Premium</button>
+    <button class="tier-btn" data-tier="vip">VIP</button>
+    <button class="tier-btn" data-tier="super">Super</button>
+    <button class="tier-btn" data-tier="top">Top</button>
+    <button id="btn-generate" class="primary">⚡ Traer partidos de hoy</button>
+    <button id="btn-followed">⭐ Seguidos</button>
+    <button id="btn-refresh">↻ Actualizar</button>
+  </div>
+  <div id="sections"></div>
+  <pre id="json-out" class="json">{}</pre>
+  <script>
+    const API = window.location.origin;
+    const CLIENT_ID = localStorage.getItem("dp_client_id") || crypto.randomUUID();
+    localStorage.setItem("dp_client_id", CLIENT_ID);
+    let currentTier = "";
+    let showFollowed = false;
+
+    function phaseLabel(p) {
+      if (p.isLive || p.matchPhase === "live") return { cls: "phase-live", text: "EN VIVO" };
+      if (p.isFinished || p.matchPhase === "finished") return { cls: "phase-finished", text: "FINALIZADO" };
+      return { cls: "phase-upcoming", text: "PRÓXIMO" };
+    }
+
+    function cardHtml(p) {
+      const ph = phaseLabel(p);
+      const cardCls = [p.isLive ? "live" : "", p.isFinished ? "finished" : "", p.isTop ? "top" : ""].filter(Boolean).join(" ");
+      return `<article class="card ${cardCls}" data-id="${p.id}">
+        <div class="badges">
+          <span class="tier tier-${p.tier}">${p.tier}</span>
+          <span class="phase ${ph.cls}">${ph.text}</span>
+          ${p.isTop ? '<span class="phase" style="background:#4a1942;color:#f9a8d4">⭐ TOP</span>' : ""}
+        </div>
+        <div class="teams">${p.homeTeam} vs ${p.awayTeam}</div>
+        <div class="pick">${p.prediction}</div>
+        ${p.analysis ? `<div class="analysis">${p.analysis}</div>` : ""}
+        <div class="meta">
+          <span>🕐 ${p.kickoffDisplay || `${p.matchDate} ${p.matchHour}`}</span>
+          <span>📊 ${p.confidence ?? "—"}%</span>
+          <span>💰 ${p.odds}</span>
+          <span>🏆 ${p.league}</span>
+          ${p.isLive && p.score ? `<span>🔴 ${p.score.minute}' · ${p.score.home}-${p.score.away}</span>` : ""}
+          ${p.isFinished && p.status !== "pending" ? `<span>✅ ${p.status}</span>` : ""}
+        </div>
+        <button class="star" data-id="${p.id}">☆</button>
+      </article>`;
+    }
+
+    function renderSection(title, items) {
+      if (!items?.length) return "";
+      return `<div class="section"><h2>${title}</h2><div class="grid">${items.map(cardHtml).join("")}</div></div>`;
+    }
+
+    function renderAll(json) {
+      const root = document.getElementById("sections");
+      const sec = json.sections || {};
+      const blocks = [
+        renderSection("🔴 En vivo", sec.live),
+        renderSection("⭐ Top picks", sec.top),
+        renderSection("📅 Próximos (más temprano primero)", sec.upcoming?.length ? sec.upcoming : json.data),
+        renderSection("✅ Finalizados", sec.finished),
+      ].filter(Boolean).join("");
+      root.innerHTML = blocks || '<div class="empty">Sin pronósticos de hoy. Pulsa «Traer partidos de hoy».</div>';
+      root.querySelectorAll(".star").forEach((btn) => {
+        btn.addEventListener("click", () => toggleFollow(btn.dataset.id, btn));
+      });
+    }
+
+    async function generateToday() {
+      const btn = document.getElementById("btn-generate");
+      const root = document.getElementById("sections");
+      btn.disabled = true;
+      root.innerHTML = '<div class="empty">Generando pronósticos del día (ESPN LATAM)…</div>';
+      try {
+        const res = await fetch(`${API}/api/v1/predictions/generate-today`, { method: "POST" });
+        const json = await res.json();
+        document.getElementById("json-out").textContent = JSON.stringify(json, null, 2);
+        if (!json.ok) throw new Error(json.message || json.error || "Error al generar");
+        showFollowed = false;
+        document.querySelectorAll(".tier-btn").forEach((b) => b.classList.remove("active"));
+        document.querySelector(".tier-btn[data-tier='']").classList.add("active");
+        currentTier = "";
+        renderAll(json);
+        const n = json.meta?.total ?? json.data?.length ?? 0;
+        const fx = json.meta?.fixtures_found ?? "?";
+        if (!n) {
+          root.innerHTML = `<div class="empty">ESPN reportó ${fx} partidos hoy, pero no se insertaron picks nuevos (¿ya existían?).</div>`;
+        }
+      } catch (err) {
+        root.innerHTML = `<div class="error">${err.message}</div>`;
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    async function fetchPredictions() {
+      const root = document.getElementById("sections");
+      root.innerHTML = '<div class="empty">Cargando…</div>';
+      try {
+        let url = showFollowed
+          ? `${API}/api/v1/predictions/followed?client_id=${encodeURIComponent(CLIENT_ID)}`
+          : `${API}/api/v1/predictions?limit=80`;
+        if (!showFollowed && currentTier) url += `&tier=${currentTier}`;
+        const res = await fetch(url);
+        const json = await res.json();
+        document.getElementById("json-out").textContent = JSON.stringify(json, null, 2);
+        if (!json.ok) throw new Error(json.message || json.error || "Error API");
+        renderAll(json);
+      } catch (err) {
+        root.innerHTML = `<div class="error">${err.message}</div>`;
+      }
+    }
+
+    async function toggleFollow(id, btn) {
+      const isOn = btn.classList.contains("on");
+      await fetch(`${API}/api/v1/predictions/${id}/follow?client_id=${encodeURIComponent(CLIENT_ID)}`, {
+        method: isOn ? "DELETE" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ client_id: CLIENT_ID }),
+      });
+      btn.classList.toggle("on", !isOn);
+      btn.textContent = isOn ? "☆" : "★";
+    }
+
+    document.querySelectorAll(".tier-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        document.querySelectorAll(".tier-btn").forEach((b) => b.classList.remove("active"));
+        btn.classList.add("active");
+        currentTier = btn.dataset.tier;
+        showFollowed = false;
+        fetchPredictions();
+      });
+    });
+    document.getElementById("btn-generate").onclick = generateToday;
+    document.getElementById("btn-followed").onclick = () => { showFollowed = true; document.querySelectorAll(".tier-btn").forEach(b => b.classList.remove("active")); fetchPredictions(); };
+    document.getElementById("btn-refresh").onclick = fetchPredictions;
+    fetchPredictions();
+    setInterval(fetchPredictions, 120000);
+  </script>
+</body>
+</html>

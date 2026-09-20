@@ -6,14 +6,20 @@
     "dev": "nodemon src/server.js",
     "start": "node src/server.js",
     "db:schema": "node src/database/runSchema.js",
-    "test": "echo \"Sin tests configurados\""
+    "db:migrate": "node src/database/migrate.js",
+    "test": "echo \"Sin tests configurados\"",
+    "backfill": "node src/scripts/backfillProduction.js --dedupe",
+    "futbool:sync": "node src/scripts/syncFutboolAssets.js",
+    "db:wipe": "node src/scripts/wipeDatabase.js",
+    "db:wipe:all": "node src/scripts/wipeDatabase.js --confirm=WIPE",
+    "db:wipe:predictions": "node src/scripts/wipeDatabase.js --confirm=WIPE --only=predictions"
   },
   "keywords": [],
   "author": "DeportivosPro",
   "license": "ISC",
   "description": "",
   "dependencies": {
-    "@devjuanes/matuclient": "^2.2.2",
+    "@devjuanes/matuclient": "^2.2.3",
     "axios": "^1.13.6",
     "cheerio": "^1.2.0",
     "cors": "^2.8.6",

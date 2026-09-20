@@ -36,6 +36,23 @@ const DEFAULT_PRIORITY_TERMS = [
   "junior",
   "deportivo cali",
   "once caldas",
+  // multi-sport
+  "nba",
+  "wnba",
+  "ncaam",
+  "euroleague",
+  "atp",
+  "wta",
+  "grand slam",
+  "roland garros",
+  "wimbledon",
+  "us open",
+  "australian open",
+  "nhl",
+  "stanley cup",
+  "mlb",
+  "ufc",
+  "bellator",
 ];
 
 function getPriorityTerms() {

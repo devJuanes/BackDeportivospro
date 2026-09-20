@@ -12,7 +12,12 @@ const {
   getPredictionSourcePolicy,
 } = require("./sourceService");
 const { getCurrentLiveSignals } = require("./liveSignalService");
-const { publishQueueDayToProduction } = require("./productionPublishService");
+const {
+  publishQueueDayToProduction,
+  isAutoPublishEnabled,
+} = require("./productionPublishService");
+const { isAiEnabled, isAgentModeEnabled, getAiProviderConfig } = require("./aiForecastService");
+const { tryAcquireFactoryLock, releaseFactoryLock, instanceId } = require("./factoryLockService");
 
 const factoryState = {
   enabled: true,
@@ -37,6 +42,17 @@ async function runFactoryCycleNow(options = {}) {
     return {
       skipped: true,
       reason: "factory_busy",
+      ...factoryState,
+    };
+  }
+
+  const lock = await tryAcquireFactoryLock();
+  if (!lock.acquired) {
+    return {
+      skipped: true,
+      reason: "factory_locked",
+      locked_by: lock.holder,
+      instance: instanceId(),
       ...factoryState,
     };
   }
@@ -99,13 +115,19 @@ async function runFactoryCycleNow(options = {}) {
     factoryState.last_run_result = {
       pipeline,
       plant_sync: plantSync,
+      auto_publish: isAutoPublishEnabled(),
+      ai_enabled: isAiEnabled(),
+      ai_agent_mode: isAgentModeEnabled(),
+      ai_provider: isAiEnabled() ? getAiProviderConfig().provider : null,
       ...(latamFootballOnly ? { latam_football_only: true } : {}),
       live_alerts_created: liveCount,
       news_stored: news.length,
       source_health_updated: sourceHealth.length,
     };
     factoryState.last_run_finished_at = new Date().toISOString();
-    logger.info("Factory cycle ejecutado correctamente.");
+    logger.info(
+      `Factory cycle OK. planta sync free=+${plantSync.free || 0} vip=+${plantSync.vip || 0} auto_publish=${isAutoPublishEnabled()}`
+    );
     return {
       skipped: false,
       ...factoryState,
@@ -117,6 +139,7 @@ async function runFactoryCycleNow(options = {}) {
     throw error;
   } finally {
     factoryState.running = false;
+    await releaseFactoryLock();
   }
 }
 
@@ -141,6 +164,11 @@ async function getFactoryStatus() {
 
   return {
     ...factoryState,
+    auto_publish: isAutoPublishEnabled(),
+    ai_enabled: isAiEnabled(),
+    ai_agent_mode: isAgentModeEnabled(),
+    timezone: process.env.FACTORY_TIMEZONE || "America/Bogota",
+    sports: getFactorySports(),
     free_today: free,
     vip_today: vip,
     live_recent_count: liveCurrent.length,

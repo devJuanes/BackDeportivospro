@@ -46,6 +46,24 @@ function isoDateToCompact(isoDate = "") {
   return String(isoDate).replace(/-/g, "");
 }
 
+/** Convierte DATE/ISO de MatuDB a YYYY-MM-DD en zona del proyecto. */
+function normalizeMatchDate(value, timeZone = "America/Bogota") {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+  if (/^\d{4}-\d{2}-\d{2}T/.test(raw)) {
+    const parsed = new Date(raw);
+    if (!Number.isNaN(parsed.getTime())) {
+      // MatuDB serializa DATE como ISO en UTC (ej. 2026-07-25T22:00:00Z = día 26 en CO).
+      const shifted = new Date(parsed.getTime() + 12 * 60 * 60 * 1000);
+      return formatDateInTimezone(shifted, timeZone);
+    }
+    return raw.slice(0, 10);
+  }
+  const m = raw.match(/^(\d{4}-\d{2}-\d{2})/);
+  return m ? m[1] : null;
+}
+
 module.exports = {
   toInt,
   clamp,
@@ -54,4 +72,5 @@ module.exports = {
   formatDateInTimezone,
   formatHourInTimezone,
   isoDateToCompact,
+  normalizeMatchDate,
 };

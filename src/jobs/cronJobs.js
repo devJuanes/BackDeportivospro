@@ -7,6 +7,7 @@ const { expireStaleVipSubscriptions } = require("../services/vipSubscriptionServ
 const { generatePreviaBlogsForDate, generateRecapBlogsOnce, todayIsoDate } = require("../services/blogGenerationService");
 const { isAiEnabled } = require("../services/aiForecastService");
 const { settlePendingPickResultsOnce } = require("../services/pickSettlementService");
+const { runTrackingJobsOnce } = require("../services/predictionTrackingService");
 
 function scheduleSafe(expression, fallback, label, task) {
   const expr = String(expression || "").trim() || fallback;
@@ -65,6 +66,15 @@ function startCronJobs() {
       await settlePendingPickResultsOnce();
     } catch (error) {
       logger.warn(`[CRON] Liquidación picks falló: ${error.message}`);
+    }
+  });
+
+  const trackingCron = process.env.CRON_TRACKING_EXPRESSION?.trim() || "*/2 * * * *";
+  scheduleSafe(trackingCron, "*/2 * * * *", "prediction_tracking", async () => {
+    try {
+      await runTrackingJobsOnce();
+    } catch (error) {
+      logger.warn(`[CRON] Tracking pronósticos falló: ${error.message}`);
     }
   });
 

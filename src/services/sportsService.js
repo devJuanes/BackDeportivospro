@@ -29,6 +29,12 @@ const ESPN_PATH_BY_SPORT = {
   esports: "esports/league-of-legends",
 };
 
+/** Extra scoreboards for multi-sport coverage (merged after primary path). */
+const ESPN_EXTRA_PATHS_BY_SPORT = {
+  basketball: ["basketball/wnba", "basketball/mens-college-basketball"],
+  tennis: ["tennis/atp", "tennis/wta"],
+};
+
 function getSupportedSports() {
   return SUPPORTED_SPORTS;
 }
@@ -77,22 +83,78 @@ function parseLeague(event) {
   );
 }
 
+function espnHeaders() {
+  return {
+    "User-Agent":
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    Accept: "application/json, text/plain, */*",
+    "Accept-Language": "es-CO,es;q=0.9,en;q=0.8",
+    Referer: "https://www.espn.com/",
+    Origin: "https://www.espn.com",
+  };
+}
+
+async function fetchEspnJson(url, timeout = 15000) {
+  let lastError;
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    try {
+      const { data } = await axios.get(url, { timeout, headers: espnHeaders() });
+      return data;
+    } catch (error) {
+      lastError = error;
+      const code = error?.code || error?.cause?.code;
+      const status = error?.response?.status;
+      /** DNS / red: no reintentar — degradar a TheSportsDB/caché. */
+      if (code === "ENOTFOUND" || code === "EAI_AGAIN" || code === "ECONNREFUSED") {
+        const host = (() => {
+          try {
+            return new URL(url).hostname;
+          } catch {
+            return "espn";
+          }
+        })();
+        logger.warn(`ESPN no alcanzable (${host}, ${code}) — se usará respaldo si hay.`);
+        throw error;
+      }
+      if (status === 403 || status === 429) {
+        await new Promise((r) => setTimeout(r, 400 * attempt));
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw lastError;
+}
+
 async function fetchEspnScoreboardRaw(sport = "football", dateIso = null) {
   const path = ESPN_PATH_BY_SPORT[sport] || ESPN_PATH_BY_SPORT.football;
   const timezone = getFactoryTimezone();
   const effectiveDateIso = dateIso || formatDateInTimezone(new Date(), timezone);
   const dateCompact = isoDateToCompact(effectiveDateIso);
   const url = `https://site.api.espn.com/apis/site/v2/sports/${path}/scoreboard?dates=${dateCompact}`;
+  const data = await fetchEspnJson(url, 15000);
+  const primary = Array.isArray(data?.events) ? data.events : [];
+  const extras = ESPN_EXTRA_PATHS_BY_SPORT[sport] || [];
+  if (extras.length === 0) return primary;
 
-  const { data } = await axios.get(url, {
-    timeout: 15000,
-    headers: {
-      "User-Agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-      Accept: "application/json",
-    },
-  });
-  return data?.events || [];
+  const seen = new Set(primary.map((e) => String(e?.id || "")));
+  const merged = [...primary];
+  for (const extraPath of extras) {
+    try {
+      const extraUrl = `https://site.api.espn.com/apis/site/v2/sports/${extraPath}/scoreboard?dates=${dateCompact}`;
+      const extraData = await fetchEspnJson(extraUrl, 12000);
+      for (const event of extraData?.events || []) {
+        const id = String(event?.id || "");
+        if (id && seen.has(id)) continue;
+        if (id) seen.add(id);
+        merged.push(event);
+      }
+      await new Promise((r) => setTimeout(r, 100));
+    } catch (error) {
+      logger.warn(`ESPN extra (${extraPath}): ${error.message || String(error)}`);
+    }
+  }
+  return merged;
 }
 
 function normalizeMinuteBySport(statusShort = "", sport = "football") {
@@ -165,15 +227,17 @@ function getLatamEspnSoccerPaths() {
 async function fetchEspnSoccerLeagueScoreboardEvents(leagueFullPath, effectiveDateIso) {
   const dateCompact = isoDateToCompact(effectiveDateIso);
   const url = `https://site.api.espn.com/apis/site/v2/sports/${leagueFullPath}/scoreboard?dates=${dateCompact}`;
-  const { data } = await axios.get(url, {
-    timeout: 12000,
-    headers: {
-      "User-Agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-      Accept: "application/json",
-    },
-  });
+  const data = await fetchEspnJson(url, 12000);
   return Array.isArray(data?.events) ? data.events : [];
+}
+
+function addUniqueFixtures(merged, seenPair, rows, extra = {}) {
+  for (const row of rows || []) {
+    const k = `${String(row.homeTeam).toLowerCase()}|${String(row.awayTeam).toLowerCase()}`;
+    if (seenPair.has(k)) continue;
+    seenPair.add(k);
+    merged.push({ ...row, ...extra });
+  }
 }
 
 /**
@@ -184,33 +248,46 @@ async function getTodayFootballFixturesLatam(dateIso = null) {
   const timezone = getFactoryTimezone();
   const effectiveDateIso = dateIso || formatDateInTimezone(new Date(), timezone);
   const paths = getLatamEspnSoccerPaths();
-  const settled = await Promise.allSettled(
-    paths.map((p) => fetchEspnSoccerLeagueScoreboardEvents(p, effectiveDateIso))
-  );
-
   const seenPair = new Set();
   const merged = [];
+  let espnOk = 0;
+  let espnFail = 0;
 
-  settled.forEach((r, idx) => {
-    const leaguePath = paths[idx];
-    if (r.status !== "fulfilled") {
-      logger.warn(`ESPN LATAM (${leaguePath}): ${r.reason?.message || String(r.reason)}`);
-      return;
+  // Secuencial: 15 peticiones en paralelo a ESPN suelen devolver 403.
+  for (const leaguePath of paths) {
+    try {
+      const events = await fetchEspnSoccerLeagueScoreboardEvents(leaguePath, effectiveDateIso);
+      const rows = mapEspnEventsToFootballFixtures(events, effectiveDateIso);
+      const before = merged.length;
+      addUniqueFixtures(merged, seenPair, rows, { source: "espn_latam", espn_league_path: leaguePath });
+      if (merged.length > before) espnOk += 1;
+    } catch (error) {
+      espnFail += 1;
+      logger.warn(`ESPN LATAM (${leaguePath}): ${error.message || String(error)}`);
     }
-    const rows = mapEspnEventsToFootballFixtures(r.value, effectiveDateIso);
-    for (const row of rows) {
-      const k = `${String(row.homeTeam).toLowerCase()}|${String(row.awayTeam).toLowerCase()}`;
-      if (seenPair.has(k)) continue;
-      seenPair.add(k);
-      merged.push({ ...row, source: "espn_latam", espn_league_path: leaguePath });
+    await new Promise((r) => setTimeout(r, 120));
+  }
+
+  if (espnOk === 0) {
+    try {
+      const allEvents = await fetchEspnScoreboardRaw("football", effectiveDateIso);
+      const rows = mapEspnEventsToFootballFixtures(allEvents, effectiveDateIso);
+      const before = merged.length;
+      addUniqueFixtures(merged, seenPair, rows, { source: "espn_soccer_all" });
+      if (merged.length > before) {
+        logger.info(`LATAM: fallback soccer/all → +${merged.length - before} fixtures (${effectiveDateIso})`);
+      }
+    } catch (error) {
+      logger.warn(`ESPN soccer/all fallback: ${error.message}`);
     }
-  });
+  }
 
   try {
     if (process.env.THESPORTSDB_DISABLED !== "true") {
       const { filterFootballFixturesLatam } = require("../utils/latamFixtures");
       const tsdb = await getTheSportsDbEventsByDay("football", effectiveDateIso, timezone);
-      const latamTsdb = filterFootballFixturesLatam(tsdb);
+      const latamTsdb =
+        espnOk === 0 && tsdb.length > 0 ? tsdb : filterFootballFixturesLatam(tsdb);
       let tsdbAdded = 0;
       for (const row of latamTsdb) {
         const k = `${String(row.homeTeam).toLowerCase()}|${String(row.awayTeam).toLowerCase()}`;
@@ -280,8 +357,11 @@ async function getTodayFootballFixturesLatam(dateIso = null) {
       status: row.status,
       minute: row.minute,
     }));
-    const fallback = filterFootballFixturesLatam(mapped);
-    logger.warn(`LATAM: ESPN devolvió 0 para ${effectiveDateIso}; caché filtrada → ${fallback.length} fixtures`);
+    const latam = filterFootballFixturesLatam(mapped);
+    const fallback = latam.length > 0 ? latam : mapped;
+    logger.warn(
+      `LATAM: ESPN devolvió 0 para ${effectiveDateIso}; caché → ${fallback.length} fixtures (latam=${latam.length})`
+    );
     return fallback;
   } catch (error) {
     logger.warn(`LATAM sin datos (${effectiveDateIso}): ${error.message}`);
@@ -366,7 +446,13 @@ async function getTodayFixturesBySport(sport = "football", dateIso = null) {
 }
 
 async function getLiveMatchesBySport(sport = "football") {
-  const events = await fetchEspnScoreboardRaw(sport, null);
+  let events = [];
+  try {
+    events = await fetchEspnScoreboardRaw(sport, null);
+  } catch (error) {
+    logger.warn(`Live ESPN omitido (${sport}): ${error.message}`);
+    return [];
+  }
   const liveRows = events
     .map((event) => {
       const teams = parseCompetitors(event);

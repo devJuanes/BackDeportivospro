@@ -107,10 +107,28 @@ async function syncSources(req, res, next) {
   }
 }
 
+async function backfillNow(req, res, next) {
+  try {
+    if (!(await isAdminHttpRequest(req))) {
+      return res.status(403).json({ error: "forbidden" });
+    }
+    const { runBackfillProduction } = require("../scripts/backfillProduction");
+    const matchDate = String(req.body?.match_date || req.query?.match_date || "").trim();
+    const result = await runBackfillProduction({
+      date: /^\d{4}-\d{2}-\d{2}$/.test(matchDate) ? matchDate : null,
+      dedupe: req.body?.dedupe !== false,
+    });
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
   getStatus,
   runNow,
   publishNow,
+  backfillNow,
   setPower,
   getSources,
   syncSources,

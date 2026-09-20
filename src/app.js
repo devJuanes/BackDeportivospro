@@ -1,4 +1,5 @@
 const express = require("express");
+const path = require("node:path");
 const cors = require("cors");
 const morgan = require("morgan");
 const predictionRoutes = require("./routes/predictionRoutes");
@@ -12,6 +13,7 @@ const blogRoutes = require("./routes/blogRoutes");
 const escaleraRoutes = require("./routes/escaleraRoutes");
 const notificationsRoutes = require("./routes/notificationsRoutes");
 const authTrialRoutes = require("./routes/authTrialRoutes");
+const apiV1Routes = require("./routes/apiV1Routes");
 const { getSupportedSports } = require("./services/sportsService");
 const logger = require("./utils/logger");
 
@@ -21,6 +23,8 @@ const app = express();
 const DEFAULT_MATUPICKS_ORIGINS = [
   "https://matupicks.app",
   "https://www.matupicks.app",
+  "https://picks.logsfm.com",
+  "http://picks.logsfm.com",
   "http://localhost:5173",
   "http://localhost:5174",
   "http://localhost:5175",
@@ -82,10 +86,22 @@ app.use(morgan("dev"));
 app.get("/health", (req, res) => {
   res.json({
     ok: true,
-    service: "DeportivosPro backend",
+    service: "DeportivosPro API",
+    version: "v1",
     supportedSports: getSupportedSports(),
   });
 });
+
+app.use("/api/v1", apiV1Routes);
+/** Team/league logos copied from futbool → `data/futbool/logos/<league>/<team>.png` */
+app.use(
+  "/assets/leagues",
+  express.static(path.join(__dirname, "..", "data", "futbool", "logos"), {
+    maxAge: "7d",
+    fallthrough: true,
+  })
+);
+app.use(express.static(path.join(__dirname, "..", "public")));
 
 app.use("/api/predictions", predictionRoutes);
 app.use("/api/predictions", vipRoutes);

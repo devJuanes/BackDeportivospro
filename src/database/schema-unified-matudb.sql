@@ -117,6 +117,11 @@ CREATE TABLE IF NOT EXISTS abetlive (
   ai_rationale TEXT,
   outcome TEXT,
   state TEXT NOT NULL DEFAULT 'live',
+  match_date DATE,
+  live_ended BOOLEAN NOT NULL DEFAULT FALSE,
+  home_goals INTEGER NOT NULL DEFAULT 0,
+  away_goals INTEGER NOT NULL DEFAULT 0,
+  prediction_id UUID,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -124,10 +129,16 @@ CREATE TABLE IF NOT EXISTS abetlive (
 -- BD existentes: añadir columnas nuevas sin recrear la tabla
 ALTER TABLE abetlive ADD COLUMN IF NOT EXISTS ai_rationale TEXT;
 ALTER TABLE abetlive ADD COLUMN IF NOT EXISTS outcome TEXT;
+ALTER TABLE abetlive ADD COLUMN IF NOT EXISTS match_date DATE;
+ALTER TABLE abetlive ADD COLUMN IF NOT EXISTS live_ended BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE abetlive ADD COLUMN IF NOT EXISTS home_goals INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE abetlive ADD COLUMN IF NOT EXISTS away_goals INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE abetlive ADD COLUMN IF NOT EXISTS prediction_id UUID;
 
 CREATE INDEX IF NOT EXISTS idx_abetlive_created_at ON abetlive (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_abetlive_sport ON abetlive (sport);
 CREATE INDEX IF NOT EXISTS idx_abetlive_state ON abetlive (state);
+CREATE INDEX IF NOT EXISTS idx_abetlive_match_date ON abetlive (match_date DESC);
 
 -- ───────────────────────────────────────────────────────────────────────────
 -- BACKEND — caché de fixtures (fixtureModel.js → fixtures_cache)

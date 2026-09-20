@@ -67,10 +67,21 @@ async function countMatuPicksFeedSinceHours(hours) {
   return (data || []).length;
 }
 
+async function getSportsNews(limit = 50) {
+  const { data, error } = await db
+    .from(TABLE)
+    .select("*")
+    .order("created_at", { ascending: false })
+    .limit(limit);
+  if (error) throw new Error(error.message || "Error obteniendo sports_news");
+  return data || [];
+}
+
 module.exports = {
   insertSportsNewsRow,
   appendScrapedToSportsNews,
   sportsNewsTitleExists,
   sportsNewsUrlExists,
   countMatuPicksFeedSinceHours,
+  getSportsNews,
 };

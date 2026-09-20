@@ -31,11 +31,11 @@ function buildPredictionSeo(payload = {}) {
   const isVip = tier === "vip";
 
   const generatedTitle = cap(
-    `Pronóstico ${home} vs ${away} hoy: ${pick} | ${league} | ${brand}`,
+    `Tip ${home} vs ${away} hoy: ${pick} | ${league} | ${brand}`,
     68
   );
   const generatedDescription = cap(
-    `Pronóstico de ${home} vs ${away} para ${date} en ${league}. Pick ${isVip ? "VIP" : "gratis"}: ${pick}. Análisis previo, contexto y datos clave en ${brand}.`,
+    `Consejo/pronóstico informativo de ${home} vs ${away} para ${date} en ${league}. Tip ${isVip ? "VIP" : "gratis"}: ${pick}. Análisis previo y datos clave en ${brand}.`,
     165
   );
 

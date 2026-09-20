@@ -64,8 +64,9 @@ async function loadFinishedResultsForDate(dateIso) {
     });
   };
 
+  const finishedStatuses = new Set(["post", "final", "ft", "finished", "ended", "complete", "completed"]);
   for (const f of dbRows) {
-    if (String(f.status || "").toLowerCase() !== "post") continue;
+    if (!finishedStatuses.has(String(f.status || "").toLowerCase())) continue;
     put(f.team_a, f.team_b, Number(f.home_goals) || 0, Number(f.away_goals) || 0, "cache");
   }
 
@@ -74,7 +75,7 @@ async function loadFinishedResultsForDate(dateIso) {
     if (isConfigured()) {
       const soc = await getSoccersFootballFixturesForDate(dateIso);
       for (const s of soc) {
-        if (String(s.status || "").toLowerCase() !== "post") continue;
+        if (!finishedStatuses.has(String(s.status || "").toLowerCase())) continue;
         put(s.homeTeam, s.awayTeam, Number(s.homeGoals) || 0, Number(s.awayGoals) || 0, "soccersapi");
       }
     }
@@ -96,7 +97,10 @@ async function settleRowsForTable(table, config) {
   const { data: picks, error } = await db.from(table).select(selectCols).eq(statusField, pendingVal).limit(280);
 
   if (error) {
-    logger.warn(`Settlement lectura ${table}: ${error.message}`);
+    const msg = String(error.message || "");
+    if (!msg.includes("does not exist") && !msg.toLowerCase().includes("fetch failed")) {
+      logger.warn(`Settlement lectura ${table}: ${msg}`);
+    }
     return { updated: 0 };
   }
   if (!picks?.length) return { updated: 0 };
@@ -140,7 +144,7 @@ async function settleRowsForTable(table, config) {
 }
 
 /**
- * Una pasada de liquidación para free_picks, vip_picks, abet, abetvip.
+ * Una pasada de liquidación — solo dp_predictions (API DeportivosPro).
  */
 async function settlePendingPickResultsOnce() {
   if (String(process.env.FACTORY_AUTO_SETTLE_ENABLED || "true").toLowerCase() === "false") {
@@ -149,36 +153,28 @@ async function settlePendingPickResultsOnce() {
 
   const configs = [
     {
-      table: process.env.FACTORY_FREE_TABLE || "free_picks",
+      table: process.env.DP_PREDICTIONS_TABLE || "dp_predictions",
       statusField: "status",
-      homeField: "team_a",
-      awayField: "team_b",
-      pickField: "pick_text",
+      homeField: "home_team",
+      awayField: "away_team",
+      pickField: "prediction",
       hasSport: true,
     },
     {
-      table: process.env.FACTORY_VIP_TABLE || "vip_picks",
-      statusField: "status",
-      homeField: "team_a",
-      awayField: "team_b",
-      pickField: "pick_text",
-      hasSport: true,
-    },
-    {
-      table: "abet",
+      table: process.env.FACTORY_PROD_FREE_TABLE || "abet",
       statusField: "state",
       homeField: "home_team_name",
       awayField: "away_team_name",
       pickField: "prediction",
-      hasSport: false,
+      hasSport: true,
     },
     {
-      table: "abetvip",
+      table: process.env.FACTORY_PROD_VIP_TABLE || "abetvip",
       statusField: "state",
       homeField: "home_team_name",
       awayField: "away_team_name",
       pickField: "prediction",
-      hasSport: false,
+      hasSport: true,
     },
   ];
 
@@ -188,7 +184,10 @@ async function settlePendingPickResultsOnce() {
       const r = await settleRowsForTable(c.table, c);
       total += r.updated || 0;
     } catch (error) {
-      logger.warn(`Settlement tabla ${c.table}: ${error.message}`);
+      const msg = String(error.message || "");
+      if (!msg.includes("does not exist") && !msg.includes("fetch failed")) {
+        logger.warn(`Settlement tabla ${c.table}: ${msg}`);
+      }
     }
   }
 
