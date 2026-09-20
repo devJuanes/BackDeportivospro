@@ -4,6 +4,7 @@ const {
   updatePredictionState,
   getSummaryToday,
 } = require("./dpPredictionModel");
+const { sortByKickoffAsc } = require("../utils/matchSchedule");
 
 async function getVipPredictions(limit = 100, filters = {}) {
   const tiers = filters.singleTier
@@ -20,8 +21,7 @@ async function getVipPredictions(limit = 100, filters = {}) {
     });
     all.push(...rows);
   }
-  all.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-  return all.slice(0, limit);
+  return sortByKickoffAsc(all).slice(0, limit);
 }
 
 async function createVipPrediction(payload) {

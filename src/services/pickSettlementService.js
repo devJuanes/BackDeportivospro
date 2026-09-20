@@ -64,8 +64,9 @@ async function loadFinishedResultsForDate(dateIso) {
     });
   };
 
+  const finishedStatuses = new Set(["post", "final", "ft", "finished", "ended", "complete", "completed"]);
   for (const f of dbRows) {
-    if (String(f.status || "").toLowerCase() !== "post") continue;
+    if (!finishedStatuses.has(String(f.status || "").toLowerCase())) continue;
     put(f.team_a, f.team_b, Number(f.home_goals) || 0, Number(f.away_goals) || 0, "cache");
   }
 
@@ -74,7 +75,7 @@ async function loadFinishedResultsForDate(dateIso) {
     if (isConfigured()) {
       const soc = await getSoccersFootballFixturesForDate(dateIso);
       for (const s of soc) {
-        if (String(s.status || "").toLowerCase() !== "post") continue;
+        if (!finishedStatuses.has(String(s.status || "").toLowerCase())) continue;
         put(s.homeTeam, s.awayTeam, Number(s.homeGoals) || 0, Number(s.awayGoals) || 0, "soccersapi");
       }
     }
@@ -156,6 +157,22 @@ async function settlePendingPickResultsOnce() {
       statusField: "status",
       homeField: "home_team",
       awayField: "away_team",
+      pickField: "prediction",
+      hasSport: true,
+    },
+    {
+      table: process.env.FACTORY_PROD_FREE_TABLE || "abet",
+      statusField: "state",
+      homeField: "home_team_name",
+      awayField: "away_team_name",
+      pickField: "prediction",
+      hasSport: true,
+    },
+    {
+      table: process.env.FACTORY_PROD_VIP_TABLE || "abetvip",
+      statusField: "state",
+      homeField: "home_team_name",
+      awayField: "away_team_name",
       pickField: "prediction",
       hasSport: true,
     },

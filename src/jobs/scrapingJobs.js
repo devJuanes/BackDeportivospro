@@ -10,7 +10,10 @@ const { getTodayFixturesBySport, getTodayFootballFixturesLatam } = require("../s
 const { prioritizeFixtures, diversifyFixtures } = require("../services/fixturePriorityService");
 const { getPredictionSourcePolicy, toHost } = require("../services/sourceService");
 const { generateAiPredictionsFromFixtures } = require("../services/aiForecastService");
-const { publishPickToProduction } = require("../services/productionPublishService");
+const {
+  publishPickToProduction,
+  loadProductionFixtureKeysForDate,
+} = require("../services/productionPublishService");
 const { mergeDedupeByKey, normalizePickLabel, fixtureTierDedupeKey, normalizeTeamToken, pairKey } = require("../utils/predictionDedupe");
 const { filterFixturesForTips, filterQualityPicks } = require("../utils/fixtureQuality");
 const { formatDateInTimezone } = require("../utils/helpers");
@@ -113,6 +116,15 @@ async function runPredictionPipeline(options = {}) {
   const existingVipKeys = new Set(existingVip.map(buildMatchKey));
   const existingFixtureFree = new Set(existingFree.map((r) => fixtureTierDedupeKey(r)));
   const existingFixtureVip = new Set(existingVip.map((r) => fixtureTierDedupeKey(r)));
+
+  /** También considerar lo ya publicado en planta (abet/abetvip) para no duplicar dev+prod. */
+  try {
+    const prodKeys = await loadProductionFixtureKeysForDate(calendarDayIso);
+    for (const k of prodKeys.free) existingFixtureFree.add(k);
+    for (const k of prodKeys.vip) existingFixtureVip.add(k);
+  } catch (error) {
+    logger.warn(`[pipeline] claves planta ${calendarDayIso}: ${error.message}`);
+  }
 
   /** Fixtures sin pick FREE y sin pick VIP (lo que falta cubrir HOY). Mantiene orden de prioridad. */
   const uncoveredForFree = fixturesByPriority.filter(

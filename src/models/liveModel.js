@@ -1,7 +1,8 @@
 const { db } = require("../config/database");
-const { scrubPlayStoreText } = require("../utils/playStoreSafe");
+const { scrubPlayStoreText, stripCjkText } = require("../utils/playStoreSafe");
 const { formatDateInTimezone, normalizeMatchDate } = require("../utils/helpers");
 const { normalizePickLabel } = require("../utils/predictionDedupe");
+const { sortByKickoffAsc } = require("../utils/matchSchedule");
 
 function factoryTimezone() {
   return process.env.FACTORY_TIMEZONE || "America/Bogota";
@@ -71,7 +72,7 @@ async function getLivePredictions(limit = 100, filters = {}) {
         const since = new Date(filters.sinceIso).getTime();
         rows = rows.filter((r) => new Date(r.created_at).getTime() >= since);
       }
-      return rows.slice(0, limit);
+      return sortByKickoffAsc(rows).slice(0, limit);
     }
     throw new Error(error.message || "Error obteniendo pronósticos live");
   }
@@ -86,7 +87,7 @@ async function getLivePredictions(limit = 100, filters = {}) {
   if (liveOnly) {
     rows = rows.filter((r) => isLiveState(r.state) && r.live_ended !== true);
   }
-  return rows.slice(0, limit);
+  return sortByKickoffAsc(rows).slice(0, limit);
 }
 
 async function createLivePrediction(payload) {
@@ -113,6 +114,8 @@ async function createLivePrediction(payload) {
   if (payload.prediction_id) {
     row.prediction_id = payload.prediction_id;
   }
+  if (payload.home_team_logo) row.home_team_logo = String(payload.home_team_logo);
+  if (payload.away_team_logo) row.away_team_logo = String(payload.away_team_logo);
 
   let { data, error } = await db.from("abetlive").insert(row);
   if (error) {
@@ -206,14 +209,14 @@ async function finalizeLivePrediction(id, { outcome = "pending", state = "ended"
   if (home_goals != null) patch.home_goals = Number(home_goals) || 0;
   if (away_goals != null) patch.away_goals = Number(away_goals) || 0;
 
-  let { error } = await db.from("abetlive").update(patch).eq("id", id);
+  let { error } = await db.from("abetlive").eq("id", id).update(patch);
   if (error) {
     const msg = String(error.message || "").toLowerCase();
     if (msg.includes("live_ended") || msg.includes("home_goals") || msg.includes("column")) {
       const slim = { state, updated_at: nowIso };
       if (outcome != null) slim.outcome = outcome;
       if (minute != null) slim.minute = Number(minute) || 0;
-      const retry = await db.from("abetlive").update(slim).eq("id", id);
+      const retry = await db.from("abetlive").eq("id", id).update(slim);
       error = retry.error;
     }
   }
@@ -223,7 +226,19 @@ async function finalizeLivePrediction(id, { outcome = "pending", state = "ended"
   return { id, ...patch };
 }
 
-async function updateLiveScore(id, patchIn = {}) {
+function syncAnalysisScoreText(text, homeGoals, awayGoals) {
+  let out = stripCjkText(String(text || ""));
+  if (!out) return out;
+  const hg = Number(homeGoals) || 0;
+  const ag = Number(awayGoals) || 0;
+  const scoreLabel = `${hg}-${ag}`;
+  return out
+    .replace(/\b\d{1,2}\s*[-–]\s*\d{1,2}\b/g, scoreLabel)
+    .replace(/\bva\s+\d{1,2}\s*[-–]\s*\d{1,2}\b/gi, `va ${scoreLabel}`)
+    .replace(/\bmarcador\s+\d{1,2}\s*[-–]\s*\d{1,2}\b/gi, `marcador ${scoreLabel}`);
+}
+
+async function updateLiveScore(id, patchIn = {}, opts = {}) {
   const patch = {
     updated_at: new Date().toISOString(),
   };
@@ -231,23 +246,31 @@ async function updateLiveScore(id, patchIn = {}) {
   if (patchIn.home_goals != null) patch.home_goals = Number(patchIn.home_goals) || 0;
   if (patchIn.away_goals != null) patch.away_goals = Number(patchIn.away_goals) || 0;
   if (patchIn.state) patch.state = patchIn.state;
+  const rationale = opts.ai_rationale ?? patchIn.ai_rationale;
+  if (rationale && patch.home_goals != null && patch.away_goals != null) {
+    patch.ai_rationale = syncAnalysisScoreText(rationale, patch.home_goals, patch.away_goals);
+  }
 
-  const { error } = await db.from("abetlive").update(patch).eq("id", id);
+  const { error } = await db.from("abetlive").eq("id", id).update(patch);
   if (error) {
     const msg = String(error.message || "").toLowerCase();
     if (msg.includes("home_goals") || msg.includes("column")) {
       const slim = { updated_at: patch.updated_at };
       if (patch.minute != null) slim.minute = patch.minute;
       if (patch.state) slim.state = patch.state;
-      await db.from("abetlive").update(slim).eq("id", id);
+      await db.from("abetlive").eq("id", id).update(slim);
       return;
     }
     throw new Error(error.message || "Error actualizando marcador live");
   }
 }
 
-/** Marca filas live como ended si el partido ya no figura en la fuente en vivo. */
-async function reconcileStaleLivePredictions(activePairKeys, sinceIso) {
+/**
+ * Marca filas live como ended solo si llevan mucho tiempo fuera del scoreboard.
+ * No cierra al primer desaparecer (ESPN puede parpadear o fallar el match de nombres).
+ */
+async function reconcileStaleLivePredictions(activePairKeys, sinceIso, options = {}) {
+  const minAgeMs = Number(options.minAgeMs) || 3 * 60 * 60 * 1000;
   const keys = activePairKeys instanceof Set ? activePairKeys : new Set(activePairKeys);
   let query = db
     .from("abetlive")
@@ -258,7 +281,7 @@ async function reconcileStaleLivePredictions(activePairKeys, sinceIso) {
   if (error?.message?.toLowerCase().includes("state") || error?.message?.toLowerCase().includes("match_date")) {
     const fallback = await db
       .from("abetlive")
-      .select("id,home_team_name,away_team_name,created_at")
+      .select("id,home_team_name,away_team_name,created_at,state,live_ended")
       .gte("created_at", sinceIso);
     data = fallback.data;
     error = fallback.error;
@@ -267,12 +290,15 @@ async function reconcileStaleLivePredictions(activePairKeys, sinceIso) {
   if (error) {
     throw new Error(error.message || "Error reconciliando live");
   }
+  const now = Date.now();
   for (const row of data || []) {
     if (!row.id || row.live_ended === true || String(row.state || "").toLowerCase() === "ended") continue;
     const k = `${row.home_team_name}|${row.away_team_name}`;
-    if (!keys.has(k)) {
-      await finalizeLivePrediction(row.id, { outcome: "pending", state: "ended" });
-    }
+    if (keys.has(k)) continue;
+    const createdMs = row.created_at ? new Date(row.created_at).getTime() : 0;
+    const ageMs = createdMs ? now - createdMs : 0;
+    if (ageMs < minAgeMs) continue;
+    await finalizeLivePrediction(row.id, { outcome: "pending", state: "ended" });
   }
 }
 

@@ -289,7 +289,8 @@ function pickTeamName(pick, side = "home") {
 
 /**
  * Fill empty home/away (and optional league) logo fields on a pick object.
- * Does not overwrite non-empty logos.
+ * Does not overwrite non-empty logos. Sets BOTH nested and flat fields so
+ * plant publish (abet/abetvip/abetlive) always persists URLs when resolved.
  */
 function enrichPickLogos(pick) {
   if (!pick || typeof pick !== "object") return pick;
@@ -303,15 +304,17 @@ function enrichPickLogos(pick) {
   const resolvedLeague = resolveLeagueLogoUrl(league);
 
   if (pick.homeTeam && typeof pick.homeTeam === "object") {
-    if (!pick.homeTeam.logo) pick.homeTeam.logo = resolvedHome;
-  } else if (!pick.home_team_logo) {
-    pick.home_team_logo = resolvedHome;
+    if (!pick.homeTeam.logo && resolvedHome) pick.homeTeam.logo = resolvedHome;
+  }
+  if (!pick.home_team_logo) {
+    pick.home_team_logo = pick.homeTeam?.logo || resolvedHome || "";
   }
 
   if (pick.awayTeam && typeof pick.awayTeam === "object") {
-    if (!pick.awayTeam.logo) pick.awayTeam.logo = resolvedAway;
-  } else if (!pick.away_team_logo) {
-    pick.away_team_logo = resolvedAway;
+    if (!pick.awayTeam.logo && resolvedAway) pick.awayTeam.logo = resolvedAway;
+  }
+  if (!pick.away_team_logo) {
+    pick.away_team_logo = pick.awayTeam?.logo || resolvedAway || "";
   }
 
   if (!pick.league_logo && resolvedLeague) {

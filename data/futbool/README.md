@@ -1,34 +1,57 @@
-# Futbool logo assets (copied)
+# Futbool logo assets (integrados en el backend)
 
-Copied **read-only** from `APIS/futbool` into BackDeportivospro. The source project was not modified.
+Fuente: `C:\Users\juanl\OneDrive\Documentos\APIS\futbool` (no se modifica ese proyecto).
+Aquí viven copias usadas al publicar pronósticos a MatuDB.
 
 ## Layout
 
 ```
 data/futbool/
-├── ligas/                 # 58 league JSON catalogs (teams + logo relative paths)
-├── logos/<league>/<team>.png   # ~952 team badges (~88 MB)
+├── ligas/                      # JSON por liga (equipos + path relativo del logo)
+├── logos/<liga>/<equipo>.png   # badges (~952)
 ├── placeholder.svg
 └── README.md
 ```
 
-## Public URLs
+## URLs públicas (Express)
 
-Mounted in Express as static files:
+Montado en `app.js`:
 
-- Pattern: `GET /assets/leagues/:leagueSlug/:teamSlug.png`
-- Local example: `http://localhost:3009/assets/leagues/premier-league/arsenal.png`
-- Production: set `PUBLIC_BASE_URL` (e.g. `https://api.example.com`) so lookup returns absolute URLs.
+- `GET /assets/leagues/:liga/:equipo.png`
+- Ejemplo local: `http://localhost:3009/assets/leagues/la-liga/barcelona.png`
+- Producción: define `PUBLIC_BASE_URL` (ej. `https://api.matupicks.app`)
 
-## Lookup
+Al publicar a `abet` / `abetvip` / `abetlive`, `futboolLogoService.enrichPickLogos` resuelve el nombre del equipo y guarda:
 
-`src/services/futboolLogoService.js` resolves team names (optional league hint) → absolute logo URL. Used when publishing to `abet` / `abetvip` and when mapping API prediction JSON.
+- `home_team_logo`
+- `away_team_logo`
 
-## Refresh from source
+Si no hay match → string vacío (sin romper el insert).
 
-```powershell
-robocopy "C:\Users\juanl\OneDrive\Documentos\APIS\futbool\data\ligas" "data\futbool\ligas" "*.json" /R:1 /W:1
-robocopy "C:\Users\juanl\OneDrive\Documentos\APIS\futbool\public\logos" "data\futbool\logos" /E /R:1 /W:1
+## Sincronizar desde APIS/futbool
+
+```bash
+npm run futbool:sync
+# o
+node src/scripts/syncFutboolAssets.js --src="C:\Users\juanl\OneDrive\Documentos\APIS\futbool"
 ```
 
-Do **not** move or delete files in the futbool project.
+Reinicia el server después para recargar el índice en memoria.
+
+## Añadir más ligas / equipos
+
+1. En el proyecto futbool: crea `scripts/configs/<slug>.js` y corre `node scripts/fetch-equipos.js --liga=<slug>` (genera JSON + PNGs).
+2. Aquí: `npm run futbool:sync`
+3. Reinicia backend.
+
+Opcional manual en este repo:
+
+1. Copia `data/ligas/<slug>.json` → `data/futbool/ligas/<slug>.json`
+2. Copia PNGs → `data/futbool/logos/<slug>/`
+3. En el JSON, cada equipo debe tener `"logo": "logos/<slug>/<equipo>.png"`
+
+## Backfill logos en filas ya publicadas
+
+```bash
+npm run backfill
+```

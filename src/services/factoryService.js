@@ -17,6 +17,7 @@ const {
   isAutoPublishEnabled,
 } = require("./productionPublishService");
 const { isAiEnabled, isAgentModeEnabled, getAiProviderConfig } = require("./aiForecastService");
+const { tryAcquireFactoryLock, releaseFactoryLock, instanceId } = require("./factoryLockService");
 
 const factoryState = {
   enabled: true,
@@ -41,6 +42,17 @@ async function runFactoryCycleNow(options = {}) {
     return {
       skipped: true,
       reason: "factory_busy",
+      ...factoryState,
+    };
+  }
+
+  const lock = await tryAcquireFactoryLock();
+  if (!lock.acquired) {
+    return {
+      skipped: true,
+      reason: "factory_locked",
+      locked_by: lock.holder,
+      instance: instanceId(),
       ...factoryState,
     };
   }
@@ -127,6 +139,7 @@ async function runFactoryCycleNow(options = {}) {
     throw error;
   } finally {
     factoryState.running = false;
+    await releaseFactoryLock();
   }
 }
 

@@ -7,7 +7,12 @@
     "start": "node src/server.js",
     "db:schema": "node src/database/runSchema.js",
     "db:migrate": "node src/database/migrate.js",
-    "test": "echo \"Sin tests configurados\""
+    "test": "echo \"Sin tests configurados\"",
+    "backfill": "node src/scripts/backfillProduction.js --dedupe",
+    "futbool:sync": "node src/scripts/syncFutboolAssets.js",
+    "db:wipe": "node src/scripts/wipeDatabase.js",
+    "db:wipe:all": "node src/scripts/wipeDatabase.js --confirm=WIPE",
+    "db:wipe:predictions": "node src/scripts/wipeDatabase.js --confirm=WIPE --only=predictions"
   },
   "keywords": [],
   "author": "DeportivosPro",

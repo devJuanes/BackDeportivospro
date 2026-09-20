@@ -18,8 +18,16 @@ const BANNED_PHRASE_REPLACEMENTS = [
   [/valor\s+de\s+cuota\s+para\s+apostar/gi, "lectura de cuota implícita"],
 ];
 
+/** Elimina caracteres CJK (chino/japonés/coreano) del texto visible. */
+function stripCjkText(value = "") {
+  return String(value || "")
+    .replace(/[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function scrubPlayStoreText(value = "") {
-  let out = String(value || "");
+  let out = stripCjkText(String(value || ""));
   for (const [pattern, replacement] of BANNED_PHRASE_REPLACEMENTS) {
     out = out.replace(pattern, replacement);
   }
@@ -33,10 +41,12 @@ function playStoreSystemGuard() {
     "NUNCA uses: apuestas, casino, casa de apuestas, betting CTA, gana dinero, asegurado.",
     "Puedes mencionar cuotas solo como dato matemático/contexto, no como producto de juego.",
     "Responde solo JSON válido en español latinoamericano.",
+    "NUNCA uses caracteres chinos, japoneses ni coreanos. Solo español latinoamericano.",
   ].join(" ");
 }
 
 module.exports = {
   scrubPlayStoreText,
   playStoreSystemGuard,
+  stripCjkText,
 };

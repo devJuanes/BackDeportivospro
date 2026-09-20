@@ -9,6 +9,9 @@ const { getLiveMatchesBySport, getFactorySports } = require("../services/sportsS
 const { runLiveLifecycleOnce } = require("../services/liveSettlementService");
 const { ensureLiveTrackingJob } = require("../models/dpPredictionModel");
 const { liveSignalDedupeKey } = require("../utils/predictionDedupe");
+const { enrichPickLogos } = require("../services/futboolLogoService");
+const { notifyLiveTip } = require("../services/telegramService");
+const { notifyLivePick } = require("../services/predictionNotifyService");
 const logger = require("../utils/logger");
 
 function delay(ms) {
@@ -111,8 +114,19 @@ async function monitorLiveMatches() {
     const sinceIso = new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString();
     const duplicate = await existsRecentLivePrediction(suggestion, sinceIso);
     if (!duplicate) {
-      const row = await createLivePrediction(suggestion);
+      enrichPickLogos(suggestion);
+      const row = await createLivePrediction({
+        ...suggestion,
+        home_team_logo: suggestion.home_team_logo || "",
+        away_team_logo: suggestion.away_team_logo || "",
+      });
       created += 1;
+      try {
+        await notifyLiveTip(row || suggestion);
+        await notifyLivePick(row || suggestion);
+      } catch {
+        /* alertas opcionales */
+      }
       const liveId = row?.id;
       if (liveId) {
         try {

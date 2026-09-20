@@ -74,9 +74,24 @@ function formatKickoffDisplay(matchDate, matchHour, timezone = getTimezone()) {
     day: "numeric",
     month: "short",
     year: "numeric",
-    hour: "2-digit",
+    hour: "numeric",
     minute: "2-digit",
-    hour12: false,
+    hour12: true,
+  }).format(kick);
+}
+
+/** Solo hora con AM/PM (ej. "5:30 p. m."). */
+function formatKickoffTimeOnly(matchDate, matchHour, timezone = getTimezone()) {
+  const date = normalizeMatchDate(matchDate, timezone);
+  const hour = normalizeMatchHour(matchHour);
+  if (!date) return hour;
+  const kick = parseKickoff(date, hour, timezone);
+  if (!kick || Number.isNaN(kick.getTime())) return hour;
+  return new Intl.DateTimeFormat("es-CO", {
+    timeZone: timezone,
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
   }).format(kick);
 }
 
@@ -157,6 +172,7 @@ function partitionPredictions(rows, now = new Date()) {
 module.exports = {
   parseKickoff,
   formatKickoffDisplay,
+  formatKickoffTimeOnly,
   todayMatchDate,
   normalizeMatchDate,
   sortByKickoffAsc,

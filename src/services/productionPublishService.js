@@ -111,13 +111,41 @@ async function publishPickToProduction(pick, tier = "free") {
 
   const existing = await loadProductionKeysForDate(table, row.match_date);
   const key = productionDedupeKey(row);
+  const fixtureKey = fixtureTierDedupeKey(row);
   if (existing.has(key)) {
     return { published: false, reason: "duplicate", table };
+  }
+  // Un pick por partido/día salvo mercados distintos con confianza alta.
+  const { data: sameFixtureRows } = await db
+    .from(table)
+    .select("prediction,confidence")
+    .eq("match_date", row.match_date)
+    .eq("home_team_name", row.home_team_name)
+    .eq("away_team_name", row.away_team_name)
+    .limit(20);
+  if (sameFixtureRows?.length) {
+    const sameMarket = sameFixtureRows.some(
+      (r) => productionDedupeKey(r) === key
+    );
+    if (sameMarket) {
+      return { published: false, reason: "duplicate", table };
+    }
+    const conf = Number(row.confidence) || 0;
+    const hasReliableAlt = sameFixtureRows.some((r) => (Number(r.confidence) || 0) >= 65);
+    if (!hasReliableAlt || conf < 65) {
+      return { published: false, reason: "fixture_covered", table, fixtureKey };
+    }
   }
 
   const { error } = await db.from(table).insert(row);
   if (error) {
     throw new Error(error.message || `Error publicando en ${table}`);
+  }
+  try {
+    const { notifyNewPublishedPick } = require("./predictionNotifyService");
+    await notifyNewPublishedPick(row, tier);
+  } catch {
+    /* push opcional */
   }
   return { published: true, table };
 }
@@ -203,9 +231,36 @@ async function publishQueueDayToProduction(matchDate) {
   };
 }
 
+async function loadProductionFixtureKeysForDate(matchDate) {
+  const freeKeys = new Set();
+  const vipKeys = new Set();
+  for (const [tier, table, set] of [
+    ["free", FREE_PROD, freeKeys],
+    ["vip", VIP_PROD, vipKeys],
+  ]) {
+    try {
+      const { data, error } = await db
+        .from(table)
+        .select("sport,home_team_name,away_team_name,match_date")
+        .eq("match_date", matchDate)
+        .limit(600);
+      if (error) continue;
+      for (const row of data || []) {
+        set.add(fixtureTierDedupeKey(row));
+      }
+    } catch {
+      /* noop */
+    }
+  }
+  return { free: freeKeys, vip: vipKeys };
+}
+
 module.exports = {
   isAutoPublishEnabled,
   publishPickToProduction,
   publishQueueDayToProduction,
   mapPickToProductionRow,
+  productionDedupeKey,
+  loadProductionKeysForDate,
+  loadProductionFixtureKeysForDate,
 };

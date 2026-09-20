@@ -5,6 +5,7 @@
  */
 const logger = require("../utils/logger");
 const { db } = require("../config/database");
+const { stripCjkText } = require("../utils/playStoreSafe");
 const {
   getActiveLiveRows,
   finalizeLivePrediction,
@@ -162,7 +163,7 @@ async function settleActiveLiveTips(activeLiveMatches = [], options = {}) {
           home_goals: liveHit.homeGoals,
           away_goals: liveHit.awayGoals,
           state: "live",
-        });
+        }, { ai_rationale: row.ai_rationale });
         await syncLinkedPrediction(row, {
           finished: false,
           homeGoals: liveHit.homeGoals,
