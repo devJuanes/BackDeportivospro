@@ -1,16 +1,38 @@
-const { landapay, SignatureVerificationError } = require("landapay");
+const { Landapay, SignatureVerificationError } = require("landapay");
 const logger = require("../utils/logger");
 
-function landapayConfigured() {
-  return Boolean(String(process.env.LANDAPAY_API_KEY || "").trim());
+let client = null;
+
+function readApiKey() {
+  return String(process.env.LANDAPAY_API_KEY || "")
+    .trim()
+    .replace(/^["']|["']$/g, "");
 }
 
-function assertConfigured() {
-  if (!landapayConfigured()) {
-    const err = new Error("LANDAPAY_API_KEY no configurada");
-    err.code = "LANDAPAY_NOT_CONFIGURED";
+function landapayConfigured() {
+  const key = readApiKey();
+  return key.startsWith("lp_sk_test_") || key.startsWith("lp_sk_live_");
+}
+
+function getClient() {
+  const apiKey = readApiKey();
+  if (!apiKey.startsWith("lp_sk_test_") && !apiKey.startsWith("lp_sk_live_")) {
+    const err = new Error(
+      "LANDAPAY_API_KEY inválida en el servidor. Debe empezar por lp_sk_test_ o lp_sk_live_.",
+    );
+    err.code = "LANDAPAY_BAD_KEY";
+    err.status = 400;
     throw err;
   }
+  if (!client) {
+    client = new Landapay({
+      apiKey,
+      webhookSecret: String(process.env.LANDAPAY_WEBHOOK_SECRET || "")
+        .trim()
+        .replace(/^["']|["']$/g, "") || undefined,
+    });
+  }
+  return client;
 }
 
 /**
@@ -26,7 +48,7 @@ async function createVipPaymentLink({
   metadata,
   idempotencyKey,
 }) {
-  assertConfigured();
+  const landapay = getClient();
   const amountCents = Math.max(1, Math.round(Number(amountUsd) * 100));
   const link = await landapay.paymentLinks.create(
     {
@@ -46,17 +68,15 @@ async function createVipPaymentLink({
 }
 
 async function retrievePayment(paymentId) {
-  assertConfigured();
-  return landapay.payments.retrieve(String(paymentId));
+  return getClient().payments.retrieve(String(paymentId));
 }
 
 function constructWebhookEvent(rawBody, signatureHeader) {
-  assertConfigured();
-  return landapay.webhooks.constructEvent(rawBody, signatureHeader);
+  return getClient().webhooks.constructEvent(rawBody, signatureHeader);
 }
 
 function isLivemode() {
-  return Boolean(landapay.livemode);
+  return readApiKey().startsWith("lp_sk_live_");
 }
 
 module.exports = {
