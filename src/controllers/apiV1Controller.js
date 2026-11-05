@@ -49,18 +49,23 @@ async function listPredictions(req, res, next) {
 
     const limit = parseLimit(req.query.limit);
     const showAll = req.query.all === "true" || req.query.today === "false";
-    const dateFilter = req.query.date ? String(req.query.date).slice(0, 10) : todayMatchDate();
+    const hasExplicitDate = Boolean(req.query.date);
+    const dateFilter = hasExplicitDate
+      ? String(req.query.date).slice(0, 10)
+      : todayMatchDate();
+    // `date=` siempre filtra ese día. `all=true` sin date = histórico (sin filtro de día).
+    const todayOnly = hasExplicitDate || !showAll;
     const rows = await getPredictions(limit, {
       tier,
-      todayOnly: !showAll,
-      date: showAll && req.query.date ? dateFilter : dateFilter,
+      todayOnly,
+      date: dateFilter,
       sport: req.query.sport,
       status: req.query.status,
     });
 
     const payload = buildPredictionsPayload(rows, {
       tier: tier || "all",
-      date: showAll && !req.query.date ? "all" : dateFilter,
+      date: todayOnly ? dateFilter : "all",
       timezone: process.env.FACTORY_TIMEZONE || "America/Bogota",
     });
     return res.json({ ok: true, ...payload });
@@ -139,12 +144,15 @@ async function listNews(req, res, next) {
   try {
     const limit = parseLimit(req.query.limit, 50, 200);
     let rows = [];
+    let source = "sports_news";
     try {
       rows = await getSportsNews(limit);
-    } catch {
+    } catch (err) {
+      source = "news_articles";
+      console.warn("[api/v1/news] sports_news falló, fallback:", err?.message || err);
       rows = await getNews(limit);
     }
-    return res.json(apiOk(rows.map(toNewsJson), { total: rows.length }));
+    return res.json(apiOk(rows.map(toNewsJson), { total: rows.length, source }));
   } catch (error) {
     return next(error);
   }

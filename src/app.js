@@ -13,7 +13,9 @@ const blogRoutes = require("./routes/blogRoutes");
 const escaleraRoutes = require("./routes/escaleraRoutes");
 const notificationsRoutes = require("./routes/notificationsRoutes");
 const authTrialRoutes = require("./routes/authTrialRoutes");
+const vipRequestRoutes = require("./routes/vipRequestRoutes");
 const apiV1Routes = require("./routes/apiV1Routes");
+const communityRoutes = require("./routes/communityRoutes");
 const { getSupportedSports } = require("./services/sportsService");
 const logger = require("./utils/logger");
 
@@ -73,6 +75,8 @@ const corsOptions = {
     "Authorization",
     "X-Requested-With",
     "x-blog-cron-secret",
+    "X-Demo-Key",
+    "x-demo-key",
     "apikey",
     "ApiKey",
   ],
@@ -80,6 +84,15 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
+
+/** Webhook Landa Pay: body crudo antes de express.json (firma Landa-Signature). */
+const { landapayWebhook } = require("./controllers/landapayPaymentsController");
+app.post(
+  "/api/payments/landapay/webhook",
+  express.raw({ type: "application/json" }),
+  landapayWebhook,
+);
+
 app.use(express.json({ limit: "1mb" }));
 app.use(morgan("dev"));
 
@@ -121,17 +134,25 @@ app.use("/api/blog", blogRoutes);
 app.use("/api/escalera", escaleraRoutes);
 app.use("/api/notifications", notificationsRoutes);
 app.use("/api/auth", authTrialRoutes);
+app.use("/api/vip", vipRequestRoutes);
+app.use("/api/community", communityRoutes);
 // Compatibilidad con clientes que usan prefijo por proyecto (MatuHttpClient Android).
 app.use("/api/projects/:projectId/escalera", escaleraRoutes);
 app.use("/api/projects/:projectId/notifications", notificationsRoutes);
+app.use("/api/projects/:projectId/vip", vipRequestRoutes);
+
+const adminRoutes = require("./routes/adminRoutes");
+app.use("/api/admin", adminRoutes);
 
 app.use((req, res) => {
-  res.status(404).json({ error: "Ruta no encontrada" });
+  res.status(404).json({ ok: false, error: "Ruta no encontrada" });
 });
 
 app.use((error, req, res, next) => {
   // eslint-disable-line no-unused-vars
+  logger.error(`[api] ${error.message}`);
   res.status(500).json({
+    ok: false,
     error: "Error interno",
     message: error.message,
   });

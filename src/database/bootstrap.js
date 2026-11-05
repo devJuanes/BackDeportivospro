@@ -77,6 +77,12 @@ function bootstrapFactoryInBackground() {
     } catch (error) {
       logger.warn(`Bootstrap fábrica falló (el servidor sigue activo): ${error.message}`);
     }
+    try {
+      const { ensureCommunitySeed } = require("../services/communitySeedService");
+      await ensureCommunitySeed({ maxNew: 14 });
+    } catch (error) {
+      logger.warn(`Bootstrap comunidad falló: ${error.message}`);
+    }
   });
 }
 

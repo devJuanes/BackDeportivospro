@@ -8,6 +8,8 @@ const { getFixturesByDateSport } = require("../models/fixtureModel");
 const { evaluateFootballPickFromText } = require("../utils/pickResultEvaluator");
 const { formatDateInTimezone } = require("../utils/helpers");
 const { normalizeTeamToken } = require("../utils/predictionDedupe");
+const { isPlausibleScore } = require("../utils/liveScoreMatch");
+const { settledFromRow, hardenSettledPatch } = require("../utils/preserveSettledOutcome");
 
 const FINISHED = new Set(["post", "final", "ft", "finished", "ended", "complete", "completed"]);
 const LIVE = new Set(["in", "live", "halftime", "ht", "1h", "2h"]);
@@ -17,12 +19,14 @@ function teamsLikelyMatch(a, b) {
   const y = normalizeTeamToken(b);
   if (!x || !y) return false;
   if (x === y) return true;
-  if (x.length >= 5 && y.length >= 5 && (x.includes(y) || y.includes(x))) return true;
+  // Evitar matches flojos (ej. "M" / "Sun") que mezclan marcadores entre partidos.
+  if (x.length < 6 || y.length < 6) return false;
+  if (x.includes(y) || y.includes(x)) return true;
   const wx = x.split(/\s+/).filter((w) => w.length > 3);
   const wy = y.split(/\s+/).filter((w) => w.length > 3);
   if (wx.length === 0 || wy.length === 0) return false;
   const overlap = wx.filter((xi) => wy.some((yi) => xi === yi || xi.includes(yi) || yi.includes(xi)));
-  return overlap.length >= Math.min(2, wx.length, wy.length) || (overlap.length >= 1 && Math.min(x.length, y.length) <= 10);
+  return overlap.length >= Math.min(2, wx.length, wy.length);
 }
 
 function mergePairKey(ta, tb) {
@@ -132,6 +136,23 @@ async function loadResultsForDate(dateIso) {
 }
 
 async function applyPickPatch(table, pickId, patch) {
+  // Blindaje: nunca degradar won/lost → pending/live.
+  try {
+    const { data } = await db
+      .from(table)
+      .select("id,state,status,outcome")
+      .eq("id", pickId)
+      .limit(1);
+    const cur = Array.isArray(data) ? data[0] : data;
+    if (cur) {
+      hardenSettledPatch(cur, patch, {
+        liveTable: table === "abetlive" || String(table).includes("live"),
+      });
+    }
+  } catch {
+    /* si no se puede leer, igual intentar update */
+  }
+
   let u = await db.from(table).eq("id", pickId).update(patch);
   if (u.error) {
     const msg = String(u.error.message || "").toLowerCase();
@@ -195,9 +216,14 @@ async function settleRowsForTable(table, config) {
 
   picks = (data || []).filter((p) => {
     const st = String(p[statusField] || "pending").toLowerCase();
+    const oc = String(p.outcome || "").toLowerCase();
     const hg = Number(p.home_goals) || 0;
     const ag = Number(p.away_goals) || 0;
     if (isLiveTable) {
+      // Ya liquidado (ended + outcome won/lost): no tocar.
+      if (["won", "lost", "void"].includes(oc) && (st === "ended" || p.live_ended === true)) {
+        return false;
+      }
       if (p.live_ended === true && (st === "won" || st === "lost")) return false;
       return st === "live" || st === "pending" || st === "won" || st === "lost" || !st;
     }
@@ -234,6 +260,7 @@ async function settleRowsForTable(table, config) {
     const away = pick[awayField];
     const pickText = pick[pickField];
     const prevState = String(pick[statusField] || "pending").toLowerCase();
+    const locked = settledFromRow(pick);
 
     let hg = Number(pick.home_goals) || 0;
     let ag = Number(pick.away_goals) || 0;
@@ -253,6 +280,53 @@ async function settleRowsForTable(table, config) {
       finished = isFinishedStatus(fx.status);
     }
 
+    const sport = String(pick.sport || "football").toLowerCase();
+    if (!isPlausibleScore(sport, hg, ag, minute)) {
+      // Limpiar marcador inventado/cruzado; conservar estado won/lost si ya existe.
+      if (hg || ag || minute) {
+        const clear = {
+          updated_at: new Date().toISOString(),
+          home_goals: 0,
+          away_goals: 0,
+          minute: 0,
+        };
+        if (locked) {
+          if (isLiveTable) {
+            clear.state = "ended";
+            clear.outcome = locked;
+            clear.live_ended = true;
+          } else {
+            clear[statusField] = locked;
+          }
+        }
+        await applyPickPatch(table, pick.id, clear);
+        scored += 1;
+      }
+      return;
+    }
+
+    // Tips ya liquidados: solo sync marcador, NUNCA bajar a pending/live.
+    if (locked || prevState === "won" || prevState === "lost" || prevState === "void" || prevState === "ganada" || prevState === "perdida") {
+      const result = locked || (prevState === "ganada" ? "won" : prevState === "perdida" ? "lost" : prevState);
+      const patch = { updated_at: new Date().toISOString() };
+      if (hg > 0 || ag > 0 || minute > 0 || fx) {
+        patch.home_goals = hg;
+        patch.away_goals = ag;
+        if (minute > 0) patch.minute = minute;
+      }
+      if (isLiveTable) {
+        patch.state = "ended";
+        patch.outcome = result;
+        patch.live_ended = true;
+      } else {
+        patch[statusField] = result;
+      }
+      if (Object.keys(patch).length <= 1) return;
+      const u = await applyPickPatch(table, pick.id, patch);
+      if (!u.error) scored += 1;
+      return;
+    }
+
     // 1) Early settle con marcador propio o de fixture (NO esperar FT en overs/BTTS).
     const outcome = evaluateFootballPickFromText(pickText, hg, ag, home, away, {
       matchFinished: finished,
@@ -266,20 +340,30 @@ async function settleRowsForTable(table, config) {
     }
 
     if (outcome === "won" || outcome === "lost" || outcome === "void") {
-      patch[statusField] = outcome;
       if (isLiveTable) {
+        patch.state = "ended";
         patch.outcome = outcome;
-        if (finished) patch.live_ended = true;
+        patch.live_ended = true;
+      } else {
+        patch[statusField] = outcome;
       }
     } else if (isLiveTable && finished) {
-      patch[statusField] = prevState === "won" || prevState === "lost" ? prevState : "pending";
+      // Partido terminó: intentar outcome; pending SOLO si no hay resultado previo ni evaluable.
+      patch.state = "ended";
       patch.live_ended = true;
-      if (prevState === "won" || prevState === "lost") patch.outcome = prevState;
-    } else if (isLiveTable && (minute > 0 || hg + ag > 0) && prevState !== "won" && prevState !== "lost") {
+      if (!locked) patch.outcome = "pending";
+    } else if (isLiveTable && (minute > 0 || hg + ag > 0)) {
       patch[statusField] = "live";
     }
 
     if (Object.keys(patch).length <= 1) return;
+
+    // Blindaje: si el tip ya tenía won/lost, no degradar.
+    hardenSettledPatch(pick, patch, { liveTable: isLiveTable });
+    if (isLiveTable && locked && patch.outcome && !["won", "lost", "void"].includes(String(patch.outcome).toLowerCase())) {
+      patch.outcome = locked;
+      patch.state = "ended";
+    }
 
     const u = await applyPickPatch(table, pick.id, patch);
     if (u.error) {
@@ -287,29 +371,24 @@ async function settleRowsForTable(table, config) {
       return;
     }
     scored += 1;
-    if (patch[statusField] && patch[statusField] !== prevState) {
+    const settledNow = isLiveTable ? patch.outcome : patch[statusField];
+    if (settledNow && settledNow !== prevState && (settledNow === "won" || settledNow === "lost")) {
       updated += 1;
-      if (
-        (patch[statusField] === "won" || patch[statusField] === "lost") &&
-        prevState !== "won" &&
-        prevState !== "lost"
-      ) {
-        try {
-          const { notifyFollowedSettled } = require("./predictionNotifyService");
-          await notifyFollowedSettled(
-            {
-              id: pick.id,
-              home_team_name: pick[homeField],
-              away_team_name: pick[awayField],
-              prediction: pick[pickField],
-              home_goals: patch.home_goals ?? pick.home_goals,
-              away_goals: patch.away_goals ?? pick.away_goals,
-            },
-            patch[statusField]
-          );
-        } catch {
-          /* push opcional */
-        }
+      try {
+        const { notifyFollowedSettled } = require("./predictionNotifyService");
+        await notifyFollowedSettled(
+          {
+            id: pick.id,
+            home_team_name: pick[homeField],
+            away_team_name: pick[awayField],
+            prediction: pick[pickField],
+            home_goals: patch.home_goals ?? pick.home_goals,
+            away_goals: patch.away_goals ?? pick.away_goals,
+          },
+          settledNow
+        );
+      } catch {
+        /* push opcional */
       }
     }
   }
@@ -341,6 +420,10 @@ async function settleRowsForTable(table, config) {
  * Una pasada de liquidación + sync de marcadores (planta + live + cola API).
  */
 async function settlePendingPickResultsOnce() {
+  const { isAutoSettleEnabled } = require("./factoryService");
+  if (!isAutoSettleEnabled()) {
+    return { skipped: true, reason: "auto_settle_disabled" };
+  }
   if (String(process.env.FACTORY_AUTO_SETTLE_ENABLED || "true").toLowerCase() === "false") {
     return { skipped: true };
   }

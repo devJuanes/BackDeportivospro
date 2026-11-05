@@ -3,6 +3,7 @@ const { scrubPlayStoreText, stripCjkText } = require("../utils/playStoreSafe");
 const { formatDateInTimezone, normalizeMatchDate } = require("../utils/helpers");
 const { normalizePickLabel } = require("../utils/predictionDedupe");
 const { sortByKickoffAsc } = require("../utils/matchSchedule");
+const { preserveSettledOutcome, settledFromRow } = require("../utils/preserveSettledOutcome");
 
 function factoryTimezone() {
   return process.env.FACTORY_TIMEZONE || "America/Bogota";
@@ -201,17 +202,68 @@ async function getActiveLiveRows(limit = 120) {
 }
 
 /**
+ * Tips ya cerrados del feed (ended / live_ended) pero SIN resultado won/lost.
+ * El cron debe re-evaluarlos con el marcador; si no, quedan pending para siempre.
+ */
+async function getUnresolvedEndedLiveRows(limit = 250) {
+  let { data, error } = await db
+    .from("abetlive")
+    .select("*")
+    .eq("state", "ended")
+    .order("updated_at", { ascending: false })
+    .limit(limit);
+
+  if (error) {
+    const fallback = await db
+      .from("abetlive")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .limit(limit);
+    data = fallback.data;
+    error = fallback.error;
+  }
+  if (error) {
+    throw new Error(error.message || "Error listando live sin liquidar");
+  }
+
+  return (data || []).filter((row) => {
+    if (settledFromRow(row)) return false;
+    const st = String(row.state || "").toLowerCase();
+    const ended = st === "ended" || row.live_ended === true;
+    if (!ended) return false;
+    const hg = Number(row.home_goals) || 0;
+    const ag = Number(row.away_goals) || 0;
+    const minute = Number(row.minute) || 0;
+    // Solo filas con marcador usable (evita spam de pending vacíos).
+    return hg + ag > 0 || minute >= 70;
+  });
+}
+
+/**
  * Cierra una señal live: deja de aparecer en el feed "en vivo".
- * outcome: won | lost | pending | null
+ * Nunca degrada won/lost/void a pending.
  */
 async function finalizeLivePrediction(id, { outcome = "pending", state = "ended", minute, home_goals, away_goals } = {}) {
+  let current = null;
+  try {
+    const { data } = await db.from("abetlive").select("id,state,outcome,live_ended").eq("id", id).limit(1);
+    current = Array.isArray(data) ? data[0] : data;
+  } catch {
+    /* ignore */
+  }
+  const preserved = preserveSettledOutcome(current || {}, outcome, state, { liveStyle: true });
   const nowIso = new Date().toISOString();
   const patch = {
-    state,
+    state: preserved.state,
+    outcome: preserved.outcome,
     live_ended: true,
     updated_at: nowIso,
   };
-  if (outcome != null) patch.outcome = outcome;
+  // Blindaje absoluto: jamás escribir pending si ya había resultado.
+  if (preserved.locked && ["pending", "live", ""].includes(String(patch.outcome || "").toLowerCase())) {
+    patch.outcome = preserved.outcome;
+    patch.state = preserved.state;
+  }
   if (minute != null) patch.minute = Number(minute) || 0;
   if (home_goals != null) patch.home_goals = Number(home_goals) || 0;
   if (away_goals != null) patch.away_goals = Number(away_goals) || 0;
@@ -220,8 +272,11 @@ async function finalizeLivePrediction(id, { outcome = "pending", state = "ended"
   if (error) {
     const msg = String(error.message || "").toLowerCase();
     if (msg.includes("live_ended") || msg.includes("home_goals") || msg.includes("column")) {
-      const slim = { state, updated_at: nowIso };
-      if (outcome != null) slim.outcome = outcome;
+      const slim = {
+        state: preserved.state,
+        updated_at: nowIso,
+      };
+      if (preserved.outcome != null) slim.outcome = preserved.outcome;
       if (minute != null) slim.minute = Number(minute) || 0;
       const retry = await db.from("abetlive").eq("id", id).update(slim);
       error = retry.error;
@@ -246,14 +301,38 @@ function syncAnalysisScoreText(text, homeGoals, awayGoals) {
 }
 
 async function updateLiveScore(id, patchIn = {}, opts = {}) {
+  let current = null;
+  try {
+    const { data } = await db.from("abetlive").select("id,state,outcome").eq("id", id).limit(1);
+    current = Array.isArray(data) ? data[0] : data;
+  } catch {
+    /* ignore */
+  }
+
+  const preserved = preserveSettledOutcome(
+    current || {},
+    patchIn.outcome != null ? patchIn.outcome : current?.outcome,
+    patchIn.state != null ? patchIn.state : current?.state,
+    { liveStyle: true }
+  );
+
   const patch = {
     updated_at: new Date().toISOString(),
   };
   if (patchIn.minute != null) patch.minute = Number(patchIn.minute) || 0;
   if (patchIn.home_goals != null) patch.home_goals = Number(patchIn.home_goals) || 0;
   if (patchIn.away_goals != null) patch.away_goals = Number(patchIn.away_goals) || 0;
-  if (patchIn.state) patch.state = patchIn.state;
-  if (patchIn.outcome != null) patch.outcome = patchIn.outcome;
+
+  // Si ya estaba liquidado: scores OK, resultado bloqueado (ended + outcome).
+  if (preserved.locked) {
+    patch.state = preserved.state;
+    patch.outcome = preserved.outcome;
+    patch.live_ended = true;
+  } else {
+    if (patchIn.state) patch.state = patchIn.state;
+    if (patchIn.outcome != null) patch.outcome = patchIn.outcome;
+  }
+
   const rationale = opts.ai_rationale ?? patchIn.ai_rationale;
   if (rationale && patch.home_goals != null && patch.away_goals != null) {
     patch.ai_rationale = syncAnalysisScoreText(rationale, patch.home_goals, patch.away_goals);
@@ -283,7 +362,7 @@ async function reconcileStaleLivePredictions(activePairKeys, sinceIso, options =
   const keys = activePairKeys instanceof Set ? activePairKeys : new Set(activePairKeys);
   let query = db
     .from("abetlive")
-    .select("id,home_team_name,away_team_name,state,match_date,created_at,live_ended")
+    .select("id,home_team_name,away_team_name,state,outcome,match_date,created_at,live_ended")
     .gte("created_at", sinceIso);
   let { data, error } = await query;
 
@@ -302,12 +381,43 @@ async function reconcileStaleLivePredictions(activePairKeys, sinceIso, options =
   const now = Date.now();
   for (const row of data || []) {
     if (!row.id || row.live_ended === true || String(row.state || "").toLowerCase() === "ended") continue;
+    // No tocar tips ya liquidados: solo marcar ended conservando won/lost.
+    const locked = settledFromRow(row);
     const k = `${row.home_team_name}|${row.away_team_name}`;
     if (keys.has(k)) continue;
     const createdMs = row.created_at ? new Date(row.created_at).getTime() : 0;
     const ageMs = createdMs ? now - createdMs : 0;
     if (ageMs < minAgeMs) continue;
-    await finalizeLivePrediction(row.id, { outcome: "pending", state: "ended" });
+    if (locked) {
+      await finalizeLivePrediction(row.id, { outcome: locked, state: locked });
+    } else {
+      // Intentar liquidar con marcador de la fila antes de dejar pending.
+      let outcome = "pending";
+      try {
+        const full = await db.from("abetlive").select("*").eq("id", row.id).limit(1);
+        const r = Array.isArray(full.data) ? full.data[0] : full.data;
+        if (r) {
+          const hg = Number(r.home_goals) || 0;
+          const ag = Number(r.away_goals) || 0;
+          const { evaluateFootballPickFromText } = require("../utils/pickResultEvaluator");
+          const sport = String(r.sport || "football").toLowerCase();
+          if ((sport === "football" || sport === "soccer") && (hg + ag > 0 || Number(r.minute) >= 70)) {
+            outcome =
+              evaluateFootballPickFromText(
+                r.prediction,
+                hg,
+                ag,
+                r.home_team_name,
+                r.away_team_name,
+                { matchFinished: true }
+              ) || "pending";
+          }
+        }
+      } catch {
+        /* ignore */
+      }
+      await finalizeLivePrediction(row.id, { outcome, state: "ended" });
+    }
   }
 }
 
@@ -319,7 +429,9 @@ async function finalizeStaleLiveByCalendar(limit = 250) {
   const today = todayLiveDate();
   let { data, error } = await db
     .from("abetlive")
-    .select("id,state,match_date,created_at,live_ended")
+    .select(
+      "id,state,outcome,match_date,created_at,live_ended,home_goals,away_goals,minute,prediction,home_team_name,away_team_name,sport"
+    )
     .eq("state", "live")
     .order("created_at", { ascending: true })
     .limit(limit);
@@ -336,13 +448,52 @@ async function finalizeStaleLiveByCalendar(limit = 250) {
   let closed = 0;
   for (const row of data || []) {
     if (row.live_ended === true) {
-      await finalizeLivePrediction(row.id, { outcome: row.outcome || "pending", state: "ended" });
-      closed += 1;
+      const locked = settledFromRow(row);
+      // No reescribir pending si ya está cerrado sin resultado; lo repara settleUnresolved.
+      if (locked) {
+        await finalizeLivePrediction(row.id, {
+          outcome: locked,
+          state: "ended",
+          home_goals: row.home_goals,
+          away_goals: row.away_goals,
+          minute: row.minute,
+        });
+        closed += 1;
+      }
       continue;
     }
     const d = rowMatchDate(row);
     if (d && d < today) {
-      await finalizeLivePrediction(row.id, { outcome: "pending", state: "ended" });
+      const locked = settledFromRow(row);
+      const hg = Number(row.home_goals) || 0;
+      const ag = Number(row.away_goals) || 0;
+      let outcome = locked || null;
+      if (!outcome && (hg + ag > 0 || Number(row.minute) >= 70)) {
+        try {
+          const { evaluateFootballPickFromText } = require("../utils/pickResultEvaluator");
+          const sport = String(row.sport || "football").toLowerCase();
+          if (sport === "football" || sport === "soccer") {
+            outcome =
+              evaluateFootballPickFromText(
+                row.prediction,
+                hg,
+                ag,
+                row.home_team_name,
+                row.away_team_name,
+                { matchFinished: true }
+              ) || null;
+          }
+        } catch {
+          /* ignore */
+        }
+      }
+      await finalizeLivePrediction(row.id, {
+        outcome: outcome || locked || "pending",
+        state: locked || outcome ? (outcome === "void" ? "void" : "ended") : "ended",
+        home_goals: hg,
+        away_goals: ag,
+        minute: row.minute,
+      });
       closed += 1;
     }
   }
@@ -355,6 +506,7 @@ module.exports = {
   existsRecentLivePrediction,
   reconcileStaleLivePredictions,
   getActiveLiveRows,
+  getUnresolvedEndedLiveRows,
   finalizeLivePrediction,
   updateLiveScore,
   finalizeStaleLiveByCalendar,

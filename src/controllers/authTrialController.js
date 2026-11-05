@@ -4,6 +4,7 @@ const {
   claimVipTrial,
   VIP_TRIAL_DAYS,
 } = require("../services/emailOtpService");
+const passwordReset = require("../services/passwordResetService");
 const { getUserIdFromBearer, getEmailFromBearer } = require("../utils/jwtAdmin");
 const logger = require("../utils/logger");
 
@@ -63,8 +64,62 @@ async function postClaimTrial(req, res) {
   }
 }
 
+async function postPasswordForgot(req, res) {
+  try {
+    const email = req.body?.email;
+    const redirectTo = req.body?.redirectTo;
+    const result = await passwordReset.requestPasswordReset(email, redirectTo);
+    return res.json(result);
+  } catch (e) {
+    const status = e.status || 500;
+    if (status >= 500) logger.error("[auth] passwordForgot", e);
+    else logger.warn(`[auth] passwordForgot ${status}: ${e.message}`);
+    return res.status(status).json({ ok: false, error: e.message || "Error al recuperar" });
+  }
+}
+
+async function postPasswordVerifyCode(req, res) {
+  try {
+    const { email, code, otpToken } = req.body || {};
+    const result = await passwordReset.verifyResetCode(email, code, otpToken);
+    return res.json(result);
+  } catch (e) {
+    const status = e.status || 500;
+    if (status >= 500) logger.error("[auth] passwordVerify", e);
+    return res.status(status).json({
+      ok: false,
+      error: e.message || "Error al verificar",
+      remainingAttempts: e.remainingAttempts,
+    });
+  }
+}
+
+async function postPasswordConfirm(req, res) {
+  try {
+    const { email, password, resetGrant, recoveryToken } = req.body || {};
+    const result = await passwordReset.confirmPasswordReset({
+      email,
+      password,
+      resetGrant,
+      recoveryToken,
+    });
+    return res.json(result);
+  } catch (e) {
+    const status = e.status || 500;
+    if (status >= 500) logger.error("[auth] passwordConfirm", e);
+    return res.status(status).json({
+      ok: false,
+      error: e.message || "Error al actualizar contraseña",
+      code: e.code,
+    });
+  }
+}
+
 module.exports = {
   postSendCode,
   postVerifyCode,
   postClaimTrial,
+  postPasswordForgot,
+  postPasswordVerifyCode,
+  postPasswordConfirm,
 };

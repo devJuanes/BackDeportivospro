@@ -1,6 +1,7 @@
 const { estimateOddsFromConfidence } = require("./oddsService");
 const { clamp } = require("../utils/helpers");
 const { resolveTeamLogoUrl } = require("./futboolLogoService");
+const { getMaxPicksPerMatch, marketFamily } = require("../utils/pickVolume");
 
 const MARKET_TEMPLATES = {
   football: {
@@ -85,12 +86,18 @@ function hashString(value = "") {
   return Math.abs(hash);
 }
 
-function pickTemplateByFixture(fixture, tier) {
+function pickTemplateByFixture(fixture, tier, slot = 0) {
   const sportTemplates = MARKET_TEMPLATES[fixture.sport] || MARKET_TEMPLATES.football;
   const pool = sportTemplates[tier] || sportTemplates.free;
-  const seed = `${fixture.eventId || ""}|${fixture.homeTeam}|${fixture.awayTeam}|${tier}`;
-  const index = hashString(seed) % pool.length;
-  return pool[index];
+  const seed = `${fixture.homeTeam}|${fixture.awayTeam}|${tier}|${fixture.match_date || ""}`;
+  const start = hashString(seed) % pool.length;
+  if (slot <= 0) return pool[start];
+  const firstFam = marketFamily(pool[start].market);
+  for (let i = 1; i < pool.length; i += 1) {
+    const cand = pool[(start + i) % pool.length];
+    if (marketFamily(cand.market) !== firstFam) return cand;
+  }
+  return pool[(start + slot) % pool.length];
 }
 
 function parseTeams(matchText = "", league = "") {
@@ -256,8 +263,8 @@ function buildTierPredictionsFromScraped(
   return out;
 }
 
-function buildPredictionFromFixture(fixture, tier = "free") {
-  const market = pickTemplateByFixture(fixture, tier);
+function buildPredictionFromFixture(fixture, tier = "free", slot = 0) {
+  const market = pickTemplateByFixture(fixture, tier, slot);
   const bias = (fixture.homeGoals || 0) - (fixture.awayGoals || 0);
   const variation = (hashString(fixture.eventId || `${fixture.homeTeam}-${fixture.awayTeam}`) % 7) - 3;
   const confidence = clamp(
@@ -311,13 +318,17 @@ function buildPredictionsFromFixtures(fixtures = [], limits = { free: 10, vip: 1
     }
     seen.add(key);
 
-    const freeMarketsPerMatch = Number.parseInt(process.env.FACTORY_RULE_MARKETS_PER_MATCH || "1", 10);
-    const vipMarketsPerMatch = Math.max(1, freeMarketsPerMatch + 1);
+    const maxPerMatch = getMaxPicksPerMatch();
+    const freeMarketsPerMatch = Math.min(
+      maxPerMatch,
+      Math.max(1, Number.parseInt(process.env.FACTORY_RULE_MARKETS_PER_MATCH || "1", 10) || 1)
+    );
+    const vipMarketsPerMatch = Math.min(maxPerMatch, freeMarketsPerMatch);
     for (let i = 0; i < freeMarketsPerMatch && free.length < limits.free; i += 1) {
-      free.push(buildPredictionFromFixture({ ...fixture, eventId: `${fixture.eventId || key}-f${i}` }, "free"));
+      free.push(buildPredictionFromFixture(fixture, "free", i));
     }
     for (let i = 0; i < vipMarketsPerMatch && vip.length < limits.vip; i += 1) {
-      vip.push(buildPredictionFromFixture({ ...fixture, eventId: `${fixture.eventId || key}-v${i}` }, "vip"));
+      vip.push(buildPredictionFromFixture(fixture, "vip", i));
     }
     if (free.length >= limits.free && vip.length >= limits.vip) {
       break;

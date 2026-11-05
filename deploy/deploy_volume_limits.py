@@ -64,7 +64,8 @@ def main():
     run(c, f"cd {APP} && " + " && ".join(upsert_parts))
 
     run(c, f"cd {APP} && export PUPPETEER_SKIP_DOWNLOAD=1 && npm ci --omit=dev", 600)
-    run(c, f"cd {APP} && node src/scripts/wipePredictions.js --confirm=WIPE_PREDICTIONS", 180)
+    # NUNCA wipe automático de tips: el historial won/lost es data del usuario.
+    # Solo borrar si el admin lo pide a mano con ALLOW_PREDICTION_WIPE=true.
     run(c, f"cd {APP} && pm2 delete backdeportivospro >/dev/null 2>&1 ; pm2 start ecosystem.config.cjs && pm2 save")
     time.sleep(6)
     code, _ = run(c, "curl -fsS http://127.0.0.1:3009/health; echo; curl -fsS https://api.picks.matupicks.app/health; echo")

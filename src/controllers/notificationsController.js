@@ -48,6 +48,35 @@ async function getPrefs(req, res) {
   }
 }
 
+async function listInbox(req, res) {
+  try {
+    const limit = Math.min(100, Math.max(1, Number.parseInt(String(req.query?.limit || "50"), 10) || 50));
+    const { data, error } = await db
+      .from("notification_logs")
+      .select("id,title,body,payload,status,created_at")
+      .eq("recipient_id", req.userId)
+      .order("created_at", { ascending: false })
+      .limit(limit);
+    if (error) throw new Error(error.message);
+    const rows = (data || []).map((row) => {
+      const payload = row.payload && typeof row.payload === "object" ? row.payload : {};
+      return {
+        id: row.id,
+        title: row.title,
+        body: row.body,
+        payload,
+        type: payload.type || "",
+        prediction_id: payload.prediction_id || "",
+        created_at: row.created_at,
+        status: row.status,
+      };
+    });
+    return res.json({ ok: true, data: rows });
+  } catch (e) {
+    return res.status(500).json({ error: "NotificationsError", message: e.message });
+  }
+}
+
 async function putPrefs(req, res) {
   try {
     const body = req.body || {};
@@ -74,4 +103,4 @@ async function putPrefs(req, res) {
   }
 }
 
-module.exports = { registerToken, unregisterToken, getPrefs, putPrefs };
+module.exports = { registerToken, unregisterToken, getPrefs, putPrefs, listInbox };

@@ -26,6 +26,7 @@
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
     "firebase-admin": "^13.8.0",
+    "landapay": "^1.2.1",
     "morgan": "^1.10.1",
     "node-cron": "^4.2.1",
     "nodemailer": "^9.0.3",

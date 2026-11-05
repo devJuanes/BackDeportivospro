@@ -21,6 +21,9 @@ const { tryAcquireFactoryLock, releaseFactoryLock, instanceId } = require("./fac
 
 const factoryState = {
   enabled: true,
+  /** Liquidación automática ganado/perdido (cron settle + live). */
+  autoSettleEnabled:
+    String(process.env.FACTORY_AUTO_SETTLE_ENABLED || "true").toLowerCase() !== "false",
   running: false,
   last_run_started_at: null,
   last_run_finished_at: null,
@@ -147,8 +150,22 @@ function setFactoryEnabled(enabled) {
   factoryState.enabled = enabled === true;
   return {
     enabled: factoryState.enabled,
+    autoSettleEnabled: factoryState.autoSettleEnabled,
     running: factoryState.running,
   };
+}
+
+function setAutoSettleEnabled(enabled) {
+  factoryState.autoSettleEnabled = enabled === true;
+  return {
+    enabled: factoryState.enabled,
+    autoSettleEnabled: factoryState.autoSettleEnabled,
+    running: factoryState.running,
+  };
+}
+
+function isAutoSettleEnabled() {
+  return factoryState.autoSettleEnabled === true;
 }
 
 async function getFactoryStatus() {
@@ -164,6 +181,7 @@ async function getFactoryStatus() {
 
   return {
     ...factoryState,
+    auto_settle_enabled: factoryState.autoSettleEnabled,
     auto_publish: isAutoPublishEnabled(),
     ai_enabled: isAiEnabled(),
     ai_agent_mode: isAgentModeEnabled(),
@@ -182,4 +200,6 @@ module.exports = {
   runFactoryCycleNow,
   getFactoryStatus,
   setFactoryEnabled,
+  setAutoSettleEnabled,
+  isAutoSettleEnabled,
 };

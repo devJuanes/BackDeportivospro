@@ -12,6 +12,7 @@ const {
 const { runLiveLifecycleOnce } = require("./liveSettlementService");
 const { evaluateFootballPickFromText } = require("../utils/pickResultEvaluator");
 const { normalizeTeamToken } = require("../utils/predictionDedupe");
+const { preserveSettledOutcome, settledFromRow } = require("../utils/preserveSettledOutcome");
 const logger = require("../utils/logger");
 
 function teamMatch(a, b) {
@@ -112,7 +113,7 @@ async function processLiveTrackingJob(job) {
   const ag = Number(fixture.away_goals) || 0;
 
   if (isFinished) {
-    const outcome =
+    const rawOutcome =
       evaluateFootballPickFromText(
         row.prediction,
         hg,
@@ -121,9 +122,12 @@ async function processLiveTrackingJob(job) {
         row.away_team_name,
         { matchFinished: true }
       ) || "pending";
+    const preserved = preserveSettledOutcome(row, rawOutcome, rawOutcome === "pending" ? "ended" : rawOutcome, {
+      liveStyle: true,
+    });
     await finalizeLivePrediction(row.id, {
-      outcome,
-      state: outcome === "pending" ? "ended" : outcome,
+      outcome: preserved.outcome,
+      state: preserved.state,
       minute: Number(fixture.minute) || row.minute || 90,
       home_goals: hg,
       away_goals: ag,
@@ -135,7 +139,7 @@ async function processLiveTrackingJob(job) {
           away_goals: ag,
           minute: Number(fixture.minute) || 90,
           is_live: false,
-          status: outcome,
+          status: preserved.outcome,
         });
       } catch {
         /* ignore */
@@ -145,7 +149,12 @@ async function processLiveTrackingJob(job) {
       last_checked_at: now.toISOString(),
       next_check_at: null,
       status: "completed",
-      live_snapshot: { homeGoals: hg, awayGoals: ag, outcome, finished: true },
+      live_snapshot: {
+        homeGoals: hg,
+        awayGoals: ag,
+        outcome: preserved.outcome,
+        finished: true,
+      },
       updated_at: now.toISOString(),
     });
     return { updated: true, liveId: row.id, finished: true };
@@ -159,19 +168,21 @@ async function processLiveTrackingJob(job) {
     row.away_team_name,
     { matchFinished: false }
   );
+  const locked = settledFromRow(row);
   const nextState =
-    early === "won" || early === "lost" || early === "void"
+    locked ||
+    (early === "won" || early === "lost" || early === "void"
       ? early
       : isLive
         ? "live"
-        : row.state;
+        : row.state);
 
   await updateLiveScore(row.id, {
     minute: Number(fixture.minute) || 0,
     home_goals: hg,
     away_goals: ag,
     state: nextState,
-    outcome: early || row.outcome || null,
+    outcome: locked || early || row.outcome || null,
   });
 
   await db.from("dp_tracking_jobs").eq("id", job.id).update({

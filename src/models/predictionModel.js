@@ -20,6 +20,7 @@ async function getFreePredictions(limit = 100, filters = {}) {
     date: filters.date,
     sport: filters.sport,
     published: true,
+    collapse: filters.collapse,
   });
 }
 

@@ -3,7 +3,11 @@
  * - Tope diario por tier (free / vip)
  * - Máx. N tips por partido (default 2), el 2º solo si es mercado distinto y confianza alta
  */
-const { normalizePickLabel, fixtureTierDedupeKey } = require("./predictionDedupe");
+const {
+  normalizePickLabel,
+  fixtureTierDedupeKey,
+  marketDedupeKey,
+} = require("./predictionDedupe");
 
 function getMaxPicksPerMatch() {
   const n = Number.parseInt(process.env.FACTORY_MAX_PICKS_PER_MATCH || "2", 10);
@@ -52,19 +56,32 @@ function pickLabel(pick) {
   return pick?.prediction || pick?.pick_text || pick?.pick || "";
 }
 
+function realExistingPicks(existingPicks = []) {
+  return (Array.isArray(existingPicks) ? existingPicks : []).filter(
+    (p) => p && !p._plant && pickLabel(p)
+  );
+}
+
 /**
  * ¿Se puede añadir este tip al partido?
  * 1º: siempre (si pasa quality gate fuera).
- * 2º: solo si confianza alta y familia de mercado distinta.
+ * 2º: solo si confianza alta, mercado distinto (texto) y familia distinta.
  */
 function shouldAcceptPickForFixture({ existingPicks = [], candidate, tier = "free" }) {
   const max = getMaxPicksPerMatch();
-  const list = Array.isArray(existingPicks) ? existingPicks : [];
-  if (list.length >= max) return false;
-  if (list.length === 0) return true;
+  const list = realExistingPicks(existingPicks);
+  const placeholders = (Array.isArray(existingPicks) ? existingPicks : []).length - list.length;
+  if (list.length + Math.max(0, placeholders) >= max) return false;
+
+  const candLabel = normalizePickLabel(pickLabel(candidate));
+  if (candLabel && list.some((p) => normalizePickLabel(pickLabel(p)) === candLabel)) {
+    return false;
+  }
+
+  if (list.length === 0 && placeholders === 0) return true;
 
   const conf = pickConfidence(candidate);
-  if (conf < getSecondPickMinConfidence(tier)) return false;
+  if (list.length >= 1 && conf < getSecondPickMinConfidence(tier)) return false;
 
   const fam = marketFamily(pickLabel(candidate));
   const used = new Set(list.map((p) => marketFamily(pickLabel(p))));
@@ -102,6 +119,64 @@ function selectTopPicksPerFixture(picks = [], tier = "free") {
   return out;
 }
 
+function isSettledPick(pick) {
+  const s = String(pick?.state || pick?.status || pick?.outcome || "").toLowerCase();
+  return ["won", "lost", "void", "ganada", "perdida", "anulada"].includes(s);
+}
+
+function pickRank(pick) {
+  let rank = pickConfidence(pick);
+  if (isSettledPick(pick)) rank += 1000;
+  return rank;
+}
+
+/**
+ * Para el feed: 1 mercado por texto + máx. 2 familias distintas por partido.
+ * No aplica el umbral de confianza del 2º tip (eso es solo al generar).
+ */
+function collapsePicksForDisplay(picks = []) {
+  const max = getMaxPicksPerMatch();
+  const byMarket = new Map();
+  for (const pick of picks || []) {
+    const mk = marketDedupeKey(pick);
+    if (!mk || mk.endsWith("|")) continue;
+    const prev = byMarket.get(mk);
+    if (!prev || pickRank(pick) > pickRank(prev)) {
+      byMarket.set(mk, pick);
+    }
+  }
+
+  const byFixture = new Map();
+  for (const pick of byMarket.values()) {
+    const fk = fixtureTierDedupeKey(pick);
+    if (!fk) continue;
+    if (!byFixture.has(fk)) byFixture.set(fk, []);
+    byFixture.get(fk).push(pick);
+  }
+
+  const out = [];
+  for (const group of byFixture.values()) {
+    const settled = group.filter(isSettledPick);
+    const pending = group
+      .filter((p) => !isSettledPick(p))
+      .sort((a, b) => pickRank(b) - pickRank(a));
+    const kept = [...settled];
+    const usedFam = new Set(settled.map((p) => marketFamily(pickLabel(p))));
+    const usedLabel = new Set(settled.map((p) => normalizePickLabel(pickLabel(p))));
+    for (const candidate of pending) {
+      if (kept.length >= Math.max(max, settled.length)) break;
+      const fam = marketFamily(pickLabel(candidate));
+      const lab = normalizePickLabel(pickLabel(candidate));
+      if (usedLabel.has(lab) || usedFam.has(fam)) continue;
+      usedFam.add(fam);
+      usedLabel.add(lab);
+      kept.push(candidate);
+    }
+    out.push(...kept);
+  }
+  return out;
+}
+
 /** Incrementa contador en Map fixtureKey → count. */
 function bumpFixtureCount(map, key) {
   if (!key || !map) return;
@@ -115,6 +190,8 @@ module.exports = {
   marketFamily,
   shouldAcceptPickForFixture,
   selectTopPicksPerFixture,
+  collapsePicksForDisplay,
+  isSettledPick,
   bumpFixtureCount,
   pickLabel,
 };

@@ -5,6 +5,7 @@ const {
   getSummaryToday,
 } = require("./dpPredictionModel");
 const { sortByKickoffAsc } = require("../utils/matchSchedule");
+const { collapsePicksForDisplay } = require("../utils/pickVolume");
 
 async function getVipPredictions(limit = 100, filters = {}) {
   const tiers = filters.singleTier
@@ -18,10 +19,12 @@ async function getVipPredictions(limit = 100, filters = {}) {
       date: filters.date,
       sport: filters.sport,
       published: true,
+      collapse: filters.collapse,
     });
     all.push(...rows);
   }
-  return sortByKickoffAsc(all).slice(0, limit);
+  const unique = filters.collapse === false ? all : collapsePicksForDisplay(all);
+  return sortByKickoffAsc(unique).slice(0, limit);
 }
 
 async function createVipPrediction(payload) {

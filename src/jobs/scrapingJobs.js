@@ -14,7 +14,13 @@ const {
   publishPickToProduction,
   loadProductionFixtureKeysForDate,
 } = require("../services/productionPublishService");
-const { mergeDedupeByKey, normalizePickLabel, fixtureTierDedupeKey, normalizeTeamToken, pairKey } = require("../utils/predictionDedupe");
+const {
+  mergeDedupeByKey,
+  fixtureTierDedupeKey,
+  marketDedupeKey,
+  normalizeTeamToken,
+  pairKey,
+} = require("../utils/predictionDedupe");
 const { filterFixturesForTips, filterQualityPicks } = require("../utils/fixtureQuality");
 const {
   getDailyCap,
@@ -26,11 +32,7 @@ const { formatDateInTimezone } = require("../utils/helpers");
 const logger = require("../utils/logger");
 
 function buildMatchKey(row) {
-  const home = row.homeTeam?.name || row.home_team_name || row.team_a || "";
-  const away = row.awayTeam?.name || row.away_team_name || row.team_b || "";
-  const date = row.date || row.match_date || "";
-  const market = normalizePickLabel(row.prediction || row.pick_text || "");
-  return `${home.toLowerCase()}|${away.toLowerCase()}|${date}|${market}`;
+  return marketDedupeKey(row);
 }
 
 function fixtureKeyForTier(fixture, sport) {
@@ -119,8 +121,8 @@ async function runPredictionPipeline(options = {}) {
 
   /** Existentes del día: claves por mercado + lista por partido (máx. N tips). */
   const [existingFree, existingVip] = await Promise.all([
-    getFreePredictions(500, { todayOnly: true, date: calendarDayIso, sport }),
-    getVipPredictions(500, { todayOnly: true, date: calendarDayIso, sport }),
+    getFreePredictions(500, { todayOnly: true, date: calendarDayIso, sport, collapse: false }),
+    getVipPredictions(500, { todayOnly: true, date: calendarDayIso, sport, collapse: false }),
   ]);
   const existingFreeKeys = new Set(existingFree.map(buildMatchKey));
   const existingVipKeys = new Set(existingVip.map(buildMatchKey));
@@ -143,17 +145,13 @@ async function runPredictionPipeline(options = {}) {
     const prodKeys = await loadProductionFixtureKeysForDate(calendarDayIso);
     plantFreeCount = prodKeys.freeCount || prodKeys.free?.size || 0;
     plantVipCount = prodKeys.vipCount || prodKeys.vip?.size || 0;
-    for (const k of prodKeys.free || []) {
-      if (!picksByFixtureFree.has(k)) picksByFixtureFree.set(k, [{ _plant: true }]);
-      else if ((picksByFixtureFree.get(k) || []).length < maxPerMatch) {
-        picksByFixtureFree.get(k).push({ _plant: true });
-      }
+    for (const row of prodKeys.freeRows || []) {
+      addExisting(picksByFixtureFree, row);
+      existingFreeKeys.add(buildMatchKey(row));
     }
-    for (const k of prodKeys.vip || []) {
-      if (!picksByFixtureVip.has(k)) picksByFixtureVip.set(k, [{ _plant: true }]);
-      else if ((picksByFixtureVip.get(k) || []).length < maxPerMatch) {
-        picksByFixtureVip.get(k).push({ _plant: true });
-      }
+    for (const row of prodKeys.vipRows || []) {
+      addExisting(picksByFixtureVip, row);
+      existingVipKeys.add(buildMatchKey(row));
     }
   } catch (error) {
     logger.warn(`[pipeline] claves planta ${calendarDayIso}: ${error.message}`);
@@ -245,19 +243,30 @@ async function runPredictionPipeline(options = {}) {
   let freeInsertedToday = freeDayTotal;
   let vipInsertedToday = vipDayTotal;
 
+  /** Mismo mercado (p.ej. hándicap -0.25) no se inserta dos veces ni en free ni en vip. */
+  const usedMarketKeys = new Set([...existingFreeKeys, ...existingVipKeys]);
+
   for (const pick of freePicks) {
     if (freeInsertedToday >= dailyCapFree) break;
     const key = buildMatchKey(pick);
     const fk = fixtureTierDedupeKey(pick);
-    if (existingFreeKeys.has(key)) continue;
+    if (usedMarketKeys.has(key) || existingFreeKeys.has(key)) continue;
     const existingForFixture = picksByFixtureFree.get(fk) || [];
     if (!shouldAcceptPickForFixture({ existingPicks: existingForFixture, candidate: pick, tier: "free" })) {
       continue;
     }
-    await createFreePrediction(pick);
+    const created = await createFreePrediction(pick);
+    if (created?._already) {
+      usedMarketKeys.add(key);
+      existingFreeKeys.add(key);
+      if (!picksByFixtureFree.has(fk)) picksByFixtureFree.set(fk, []);
+      picksByFixtureFree.get(fk).push(created);
+      continue;
+    }
     insertedFree += 1;
     freeInsertedToday += 1;
     existingFreeKeys.add(key);
+    usedMarketKeys.add(key);
     if (!picksByFixtureFree.has(fk)) picksByFixtureFree.set(fk, []);
     picksByFixtureFree.get(fk).push(pick);
     try {
@@ -271,15 +280,23 @@ async function runPredictionPipeline(options = {}) {
     if (vipInsertedToday >= dailyCapVip) break;
     const key = buildMatchKey(pick);
     const fk = fixtureTierDedupeKey(pick);
-    if (existingVipKeys.has(key)) continue;
+    if (usedMarketKeys.has(key) || existingVipKeys.has(key)) continue;
     const existingForFixture = picksByFixtureVip.get(fk) || [];
     if (!shouldAcceptPickForFixture({ existingPicks: existingForFixture, candidate: pick, tier: "vip" })) {
       continue;
     }
-    await createVipPrediction(pick);
+    const created = await createVipPrediction(pick);
+    if (created?._already) {
+      usedMarketKeys.add(key);
+      existingVipKeys.add(key);
+      if (!picksByFixtureVip.has(fk)) picksByFixtureVip.set(fk, []);
+      picksByFixtureVip.get(fk).push(created);
+      continue;
+    }
     insertedVip += 1;
     vipInsertedToday += 1;
     existingVipKeys.add(key);
+    usedMarketKeys.add(key);
     if (!picksByFixtureVip.has(fk)) picksByFixtureVip.set(fk, []);
     picksByFixtureVip.get(fk).push(pick);
     try {

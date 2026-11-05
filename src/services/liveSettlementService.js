@@ -8,6 +8,7 @@ const { db } = require("../config/database");
 const { stripCjkText } = require("../utils/playStoreSafe");
 const {
   getActiveLiveRows,
+  getUnresolvedEndedLiveRows,
   finalizeLivePrediction,
   updateLiveScore,
   finalizeStaleLiveByCalendar,
@@ -16,30 +17,19 @@ const {
 } = require("../models/liveModel");
 const { getFixturesByDateSport } = require("../models/fixtureModel");
 const { evaluateFootballPickFromText } = require("../utils/pickResultEvaluator");
-const { normalizeTeamToken } = require("../utils/predictionDedupe");
+const {
+  findLiveMatch,
+  teamsStrictMatch,
+  isPlausibleScore,
+  normalizeSport,
+} = require("../utils/liveScoreMatch");
+const { preserveSettledOutcome, settledFromRow } = require("../utils/preserveSettledOutcome");
 const { updatePredictionLiveData, updatePredictionState } = require("../models/dpPredictionModel");
 
 const FINISHED_STATUSES = new Set(["post", "final", "ft", "finished", "ended", "complete", "completed"]);
 
-function teamMatch(a, b) {
-  const na = normalizeTeamToken(a);
-  const nb = normalizeTeamToken(b);
-  if (!na || !nb) return false;
-  return na === nb || na.includes(nb) || nb.includes(na);
-}
-
 function isFinishedStatus(status) {
   return FINISHED_STATUSES.has(String(status || "").toLowerCase());
-}
-
-function findLiveMatch(activeMatches, home, away) {
-  return (
-    (activeMatches || []).find(
-      (m) =>
-        (teamMatch(m.homeTeam, home) && teamMatch(m.awayTeam, away)) ||
-        (teamMatch(m.homeTeam, away) && teamMatch(m.awayTeam, home))
-    ) || null
-  );
 }
 
 async function findCachedFixture(sport, matchDate, home, away) {
@@ -49,8 +39,8 @@ async function findCachedFixture(sport, matchDate, home, away) {
     return (
       (rows || []).find(
         (f) =>
-          (teamMatch(f.team_a, home) && teamMatch(f.team_b, away)) ||
-          (teamMatch(f.team_a, away) && teamMatch(f.team_b, home))
+          (teamsStrictMatch(f.team_a, home) && teamsStrictMatch(f.team_b, away)) ||
+          (teamsStrictMatch(f.team_a, away) && teamsStrictMatch(f.team_b, home))
       ) || null
     );
   } catch (error) {
@@ -65,17 +55,28 @@ async function findCachedFixture(sport, matchDate, home, away) {
 async function syncLinkedPrediction(row, { finished, outcome, homeGoals, awayGoals, minute, isLive }) {
   const predId = row.prediction_id;
   if (!predId) return;
+  const preserved = preserveSettledOutcome(row, outcome, outcome);
+  const finalOutcome = preserved.outcome;
   try {
     await updatePredictionLiveData(predId, {
       home_goals: homeGoals,
       away_goals: awayGoals,
       minute: minute || 0,
-      is_live: Boolean(isLive) && !finished,
-      status: finished ? outcome || "pending" : isLive ? "live" : undefined,
+      is_live: Boolean(isLive) && !finished && !preserved.locked,
+      status: finished || preserved.locked ? finalOutcome || "pending" : isLive ? "live" : undefined,
     });
-    if (finished && (outcome === "won" || outcome === "lost" || outcome === "pending")) {
-      await updatePredictionState(predId, outcome);
-      await updatePredictionLiveData(predId, { is_live: false, status: outcome });
+    if (
+      (finished || preserved.locked) &&
+      (finalOutcome === "won" || finalOutcome === "lost" || finalOutcome === "pending")
+    ) {
+      // Nunca bajar won/lost a pending en dp_predictions.
+      if (!(settledFromRow(row) && finalOutcome === "pending")) {
+        await updatePredictionState(predId, finalOutcome);
+      }
+      await updatePredictionLiveData(predId, {
+        is_live: false,
+        status: settledFromRow(row) || finalOutcome,
+      });
     }
   } catch (error) {
     logger.warn(`[live-settle] sync dp_predictions ${predId}: ${error.message}`);
@@ -135,7 +136,39 @@ async function settleActiveLiveTips(activeLiveMatches = [], options = {}) {
     rows = await getActiveLiveRows(150);
   } catch (error) {
     logger.warn(`[live-settle] lectura activos: ${error.message}`);
-    return { settled: 0, refreshed: 0, staleClosed: 0 };
+    return { settled: 0, refreshed: 0, staleClosed: 0, repaired: 0 };
+  }
+
+  // Re-liquidar tips ya "ended" pero con outcome=pending (bug histórico).
+  let repaired = 0;
+  try {
+    const stuck = await getUnresolvedEndedLiveRows(200);
+    for (const row of stuck) {
+      if (settledFromRow(row)) continue;
+      const hg = Number(row.home_goals) || 0;
+      const ag = Number(row.away_goals) || 0;
+      if (!isPlausibleScore(row.sport, hg, ag, Number(row.minute) || 90)) continue;
+      const raw = resolveOutcome(row, hg, ag, true);
+      if (raw !== "won" && raw !== "lost" && raw !== "void") continue;
+      await finalizeLivePrediction(row.id, {
+        outcome: raw,
+        state: "ended",
+        minute: Number(row.minute) || 90,
+        home_goals: hg,
+        away_goals: ag,
+      });
+      await syncLinkedPrediction(row, {
+        finished: true,
+        outcome: raw,
+        homeGoals: hg,
+        awayGoals: ag,
+        minute: Number(row.minute) || 90,
+        isLive: false,
+      });
+      repaired += 1;
+    }
+  } catch (error) {
+    logger.warn(`[live-settle] repair ended+pending: ${error.message}`);
   }
 
   let settled = 0;
@@ -148,61 +181,104 @@ async function settleActiveLiveTips(activeLiveMatches = [], options = {}) {
     const matchDate = rowMatchDate(row) || today;
     const pairKey = `${home}|${away}`;
 
-    // Día anterior (o sin fecha clara pero created_at viejo): fuera del feed live.
+    // Día anterior: cerrar feed live SIN borrar resultado ganado/perdido.
     if (matchDate < today) {
-      await finalizeLivePrediction(row.id, { outcome: "pending", state: "ended" });
+      const locked = settledFromRow(row);
+      const hg = Number(row.home_goals) || 0;
+      const ag = Number(row.away_goals) || 0;
+      let outcome = locked || null;
+      if (!outcome && (hg + ag > 0 || Number(row.minute) >= 70)) {
+        outcome = resolveOutcome(row, hg, ag, true);
+        if (outcome === "pending") outcome = null;
+      }
+      await finalizeLivePrediction(row.id, {
+        outcome: outcome || locked || "pending",
+        state: "ended",
+        home_goals: hg,
+        away_goals: ag,
+        minute: row.minute,
+      });
       await completeTrackingJobsForLive(row.id);
       staleClosed += 1;
       continue;
     }
 
-    const liveHit = findLiveMatch(activeLiveMatches, home, away);
+    const liveHit = findLiveMatch(activeLiveMatches, home, away, row.sport);
     if (liveHit) {
       try {
         const hg = Number(liveHit.homeGoals) || 0;
         const ag = Number(liveHit.awayGoals) || 0;
-        const early = evaluateFootballPickFromText(
-          row.prediction,
-          hg,
-          ag,
-          home,
-          away,
-          { matchFinished: false }
-        );
-        const nextState =
-          early === "won" || early === "lost" || early === "void"
-            ? early
-            : row.state === "won" || row.state === "lost"
-              ? row.state
-              : "live";
-        await updateLiveScore(
-          row.id,
-          {
+        const sport = normalizeSport(row.sport);
+        const early =
+          sport === "football"
+            ? evaluateFootballPickFromText(row.prediction, hg, ag, home, away, {
+                matchFinished: false,
+              })
+            : null;
+        if (early === "won" || early === "lost" || early === "void") {
+          // Liquidación temprana: cerrar tip (ended + outcome). NUNCA volver a pending.
+          await finalizeLivePrediction(row.id, {
+            outcome: early,
+            state: "ended",
             minute: liveHit.minute,
             home_goals: hg,
             away_goals: ag,
-            state: nextState,
-            outcome: early || row.outcome || null,
-          },
-          { ai_rationale: row.ai_rationale }
-        );
-        await syncLinkedPrediction(row, {
-          finished: Boolean(early),
-          outcome: early || undefined,
-          homeGoals: hg,
-          awayGoals: ag,
-          minute: liveHit.minute,
-          isLive: !early,
-        });
-        if (early) {
+          });
+          await syncLinkedPrediction(row, {
+            finished: true,
+            outcome: early,
+            homeGoals: hg,
+            awayGoals: ag,
+            minute: liveHit.minute,
+            isLive: false,
+          });
           settled += 1;
         } else {
+          const nextState =
+            row.state === "won" || row.state === "lost" ? row.state : "live";
+          await updateLiveScore(
+            row.id,
+            {
+              minute: liveHit.minute,
+              home_goals: hg,
+              away_goals: ag,
+              state: nextState,
+              outcome: row.outcome || null,
+            },
+            { ai_rationale: row.ai_rationale }
+          );
+          await syncLinkedPrediction(row, {
+            finished: false,
+            homeGoals: hg,
+            awayGoals: ag,
+            minute: liveHit.minute,
+            isLive: true,
+          });
           refreshed += 1;
         }
       } catch (error) {
         logger.warn(`[live-settle] refresh ${row.id}: ${error.message}`);
       }
       continue;
+    }
+
+    // Marcador imposible (leak cross-sport): limpiar en vez de mostrar basura.
+    const curHg = Number(row.home_goals) || 0;
+    const curAg = Number(row.away_goals) || 0;
+    const curMin = Number(row.minute) || 0;
+    if (!isPlausibleScore(row.sport, curHg, curAg, curMin) && (curHg || curAg || curMin)) {
+      try {
+        await updateLiveScore(row.id, {
+          minute: 0,
+          home_goals: 0,
+          away_goals: 0,
+          state: row.state === "won" || row.state === "lost" ? row.state : "live",
+          outcome: row.outcome || null,
+        });
+        refreshed += 1;
+      } catch (error) {
+        logger.warn(`[live-settle] clear bad score ${row.id}: ${error.message}`);
+      }
     }
 
     // No está en el scoreboard en vivo: mirar caché / estado final.
@@ -213,18 +289,21 @@ async function settleActiveLiveTips(activeLiveMatches = [], options = {}) {
     if (finished) {
       const hg = Number(fixture.home_goals) || 0;
       const ag = Number(fixture.away_goals) || 0;
-      const outcome = resolveOutcome(row, hg, ag, true);
-      const endState = outcome === "pending" ? "ended" : outcome;
+      if (!isPlausibleScore(row.sport, hg, ag, Number(fixture.minute) || 90)) {
+        continue;
+      }
+      const rawOutcome = resolveOutcome(row, hg, ag, true);
+      const preserved = preserveSettledOutcome(row, rawOutcome, rawOutcome === "pending" ? "ended" : rawOutcome);
       await finalizeLivePrediction(row.id, {
-        outcome,
-        state: endState,
+        outcome: preserved.outcome,
+        state: preserved.state,
         minute: Number(fixture.minute) || row.minute || 90,
         home_goals: hg,
         away_goals: ag,
       });
       await syncLinkedPrediction(row, {
         finished: true,
-        outcome,
+        outcome: preserved.outcome,
         homeGoals: hg,
         awayGoals: ag,
         minute: Number(fixture.minute) || 90,
@@ -244,19 +323,23 @@ async function settleActiveLiveTips(activeLiveMatches = [], options = {}) {
     if (allowGoneFromBoard && goneFromBoard && ageMs >= 3 * 60 * 60 * 1000) {
       const hg = Number(fixture?.home_goals ?? row.home_goals) || 0;
       const ag = Number(fixture?.away_goals ?? row.away_goals) || 0;
-      const outcome =
-        fixture && isFinishedStatus(fxStatus) ? resolveOutcome(row, hg, ag) : "pending";
+      const useScores = isPlausibleScore(row.sport, hg, ag, row.minute);
+      const rawOutcome =
+        fixture && isFinishedStatus(fxStatus) && useScores
+          ? resolveOutcome(row, hg, ag)
+          : "pending";
+      const preserved = preserveSettledOutcome(row, rawOutcome, "ended");
       await finalizeLivePrediction(row.id, {
-        outcome,
-        state: "ended",
-        home_goals: hg,
-        away_goals: ag,
+        outcome: preserved.outcome,
+        state: preserved.state,
+        home_goals: useScores ? hg : 0,
+        away_goals: useScores ? ag : 0,
       });
       await syncLinkedPrediction(row, {
         finished: true,
-        outcome,
-        homeGoals: hg,
-        awayGoals: ag,
+        outcome: preserved.outcome,
+        homeGoals: useScores ? hg : 0,
+        awayGoals: useScores ? ag : 0,
         minute: row.minute,
         isLive: false,
       });
@@ -265,7 +348,7 @@ async function settleActiveLiveTips(activeLiveMatches = [], options = {}) {
     }
   }
 
-  return { settled, refreshed, staleClosed, today };
+  return { settled, refreshed, staleClosed, repaired, today };
 }
 
 /**
@@ -274,6 +357,11 @@ async function settleActiveLiveTips(activeLiveMatches = [], options = {}) {
  * @param {{ allowGoneFromBoard?: boolean }} options
  */
 async function runLiveLifecycleOnce(activeLiveMatches = [], options = {}) {
+  const { isAutoSettleEnabled } = require("./factoryService");
+  if (!isAutoSettleEnabled()) {
+    return { calendarClosed: 0, settled: 0, refreshed: 0, staleClosed: 0, skipped: true };
+  }
+
   let calendar = { closed: 0 };
   try {
     calendar = await finalizeStaleLiveByCalendar(300);
@@ -281,17 +369,18 @@ async function runLiveLifecycleOnce(activeLiveMatches = [], options = {}) {
     logger.warn(`[live-settle] cleanup calendario: ${error.message}`);
   }
 
-  let settle = { settled: 0, refreshed: 0, staleClosed: 0 };
+  let settle = { settled: 0, refreshed: 0, staleClosed: 0, repaired: 0 };
   try {
     settle = await settleActiveLiveTips(activeLiveMatches, options);
   } catch (error) {
     logger.warn(`[live-settle] ciclo: ${error.message}`);
   }
 
-  const closed = (calendar.closed || 0) + (settle.staleClosed || 0) + (settle.settled || 0);
+  const closed =
+    (calendar.closed || 0) + (settle.staleClosed || 0) + (settle.settled || 0) + (settle.repaired || 0);
   if (closed > 0 || settle.refreshed > 0) {
     logger.info(
-      `[live-settle] cerrados=${closed}, actualizados=${settle.refreshed || 0}, dia=${calendar.today || settle.today || todayLiveDate()}`
+      `[live-settle] cerrados=${closed}, reparados=${settle.repaired || 0}, actualizados=${settle.refreshed || 0}, dia=${calendar.today || settle.today || todayLiveDate()}`
     );
   }
 
@@ -300,6 +389,7 @@ async function runLiveLifecycleOnce(activeLiveMatches = [], options = {}) {
     settled: settle.settled || 0,
     refreshed: settle.refreshed || 0,
     staleClosed: settle.staleClosed || 0,
+    repaired: settle.repaired || 0,
   };
 }
 

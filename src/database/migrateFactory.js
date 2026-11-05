@@ -36,7 +36,15 @@ async function runFactoryMigrations() {
     "ALTER TABLE IF EXISTS pf_users ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMPTZ;",
     "ALTER TABLE IF EXISTS pf_users ADD COLUMN IF NOT EXISTS vip_trial_claimed_at TIMESTAMPTZ;",
     "ALTER TABLE IF EXISTS pf_users ADD COLUMN IF NOT EXISTS phone TEXT;",
+    "ALTER TABLE IF EXISTS pf_users ADD COLUMN IF NOT EXISTS favorite_team TEXT;",
+    "ALTER TABLE IF EXISTS pf_users ADD COLUMN IF NOT EXISTS favorite_league TEXT;",
+    "ALTER TABLE IF EXISTS pf_users ADD COLUMN IF NOT EXISTS coins_balance INT NOT NULL DEFAULT 100;",
     "CREATE INDEX IF NOT EXISTS idx_pf_users_phone ON pf_users(phone);",
+    "CREATE TABLE IF NOT EXISTS pf_purchases (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), user_id UUID NOT NULL, prediction_id TEXT NOT NULL, coins INT NOT NULL DEFAULT 0, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE(user_id, prediction_id));",
+    "CREATE INDEX IF NOT EXISTS idx_pf_purchases_user ON pf_purchases(user_id, created_at DESC);",
+    "CREATE TABLE IF NOT EXISTS pf_mission_claims (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), user_id UUID NOT NULL, mission_id TEXT NOT NULL, day_key TEXT NOT NULL, coins INT NOT NULL DEFAULT 0, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE(user_id, mission_id, day_key));",
+    "CREATE TABLE IF NOT EXISTS pf_community_messages (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), user_id TEXT, user_name TEXT NOT NULL DEFAULT 'Usuario', body TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());",
+    "CREATE INDEX IF NOT EXISTS idx_pf_community_messages_created ON pf_community_messages(created_at DESC);",
     "CREATE TABLE IF NOT EXISTS pf_email_otps (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), email TEXT NOT NULL, code_hash TEXT NOT NULL, expires_at TIMESTAMPTZ NOT NULL, attempts INT NOT NULL DEFAULT 0, consumed_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());",
     "CREATE INDEX IF NOT EXISTS idx_pf_email_otps_email_created ON pf_email_otps(email, created_at DESC);",
     "CREATE TABLE IF NOT EXISTS wompi_vip_redemptions (reference TEXT PRIMARY KEY, wompi_transaction_id TEXT, user_id UUID NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());",
@@ -210,6 +218,81 @@ async function runFactoryMigrations() {
       is_active BOOLEAN NOT NULL DEFAULT TRUE,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );`,
+    `CREATE TABLE IF NOT EXISTS vip_requests (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id TEXT NOT NULL,
+      user_email TEXT,
+      user_name TEXT,
+      phone TEXT,
+      status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'approved', 'rejected')),
+      message TEXT,
+      notes TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );`,
+    "CREATE INDEX IF NOT EXISTS idx_vip_requests_user_id ON vip_requests (user_id);",
+    "CREATE INDEX IF NOT EXISTS idx_vip_requests_status_created ON vip_requests (status, created_at DESC);",
+    `CREATE TABLE IF NOT EXISTS app_modal_campaigns (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      image_url TEXT NOT NULL DEFAULT '',
+      title TEXT NOT NULL DEFAULT '',
+      body TEXT NOT NULL DEFAULT '',
+      cta_label TEXT NOT NULL DEFAULT '',
+      cta_url TEXT NOT NULL DEFAULT '',
+      cta_route TEXT NOT NULL DEFAULT '',
+      active BOOLEAN NOT NULL DEFAULT FALSE,
+      starts_at TIMESTAMPTZ,
+      ends_at TIMESTAMPTZ,
+      priority INT NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );`,
+    "CREATE INDEX IF NOT EXISTS idx_app_modal_campaigns_active_window ON app_modal_campaigns (active, starts_at, ends_at DESC);",
+    `CREATE TABLE IF NOT EXISTS pf_community_threads (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      title TEXT NOT NULL,
+      body TEXT NOT NULL,
+      user_name TEXT NOT NULL DEFAULT 'Usuario',
+      user_id TEXT,
+      prediction_id TEXT,
+      sport TEXT,
+      league TEXT,
+      home_team TEXT,
+      away_team TEXT,
+      upvotes INT NOT NULL DEFAULT 0,
+      reply_count INT NOT NULL DEFAULT 0,
+      is_simulated BOOLEAN NOT NULL DEFAULT FALSE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );`,
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_pf_community_threads_prediction ON pf_community_threads(prediction_id) WHERE prediction_id IS NOT NULL;",
+    "CREATE INDEX IF NOT EXISTS idx_pf_community_threads_created ON pf_community_threads(created_at DESC);",
+    `CREATE TABLE IF NOT EXISTS pf_community_replies (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      thread_id UUID NOT NULL,
+      user_name TEXT NOT NULL DEFAULT 'Usuario',
+      user_id TEXT,
+      body TEXT NOT NULL,
+      is_simulated BOOLEAN NOT NULL DEFAULT FALSE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );`,
+    "CREATE INDEX IF NOT EXISTS idx_pf_community_replies_thread ON pf_community_replies(thread_id, created_at ASC);",
+    `CREATE TABLE IF NOT EXISTS pf_community_meta (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );`,
+    "ALTER TABLE IF EXISTS pf_community_replies ADD COLUMN IF NOT EXISTS upvotes INT NOT NULL DEFAULT 0;",
+    "ALTER TABLE IF EXISTS pf_community_replies ADD COLUMN IF NOT EXISTS parent_id UUID;",
+    `CREATE TABLE IF NOT EXISTS pf_community_likes (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_key TEXT NOT NULL,
+      target_type TEXT NOT NULL CHECK (target_type IN ('thread', 'reply')),
+      target_id UUID NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(user_key, target_type, target_id)
+    );`,
+    "CREATE INDEX IF NOT EXISTS idx_pf_community_likes_target ON pf_community_likes(target_type, target_id);",
   ];
 
   for (const sql of statements) {

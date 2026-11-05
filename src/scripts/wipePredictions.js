@@ -1,8 +1,10 @@
 /**
  * Borra TODOS los pronósticos (cola + planta + live + tracking jobs relacionados).
  *
- * Uso:
- *   node src/scripts/wipePredictions.js --confirm=WIPE_PREDICTIONS
+ * Uso (doble confirmación obligatoria):
+ *   ALLOW_PREDICTION_WIPE=true node src/scripts/wipePredictions.js --confirm=WIPE_PREDICTIONS
+ *
+ * Nunca se ejecuta desde cron/PM2. Solo manual cuando el admin lo pide.
  */
 require("dotenv").config();
 const { executeRawSql } = require("../config/database");
@@ -32,8 +34,16 @@ async function wipe(table) {
 }
 
 async function main() {
+  if (String(process.env.ALLOW_PREDICTION_WIPE || "").toLowerCase() !== "true") {
+    console.error(
+      "BLOQUEADO: wipe de pronósticos deshabilitado. Define ALLOW_PREDICTION_WIPE=true solo si el admin lo pidió explícitamente."
+    );
+    process.exit(1);
+  }
   if (!process.argv.includes("--confirm=WIPE_PREDICTIONS")) {
-    console.error("Uso: node src/scripts/wipePredictions.js --confirm=WIPE_PREDICTIONS");
+    console.error(
+      "Uso: ALLOW_PREDICTION_WIPE=true node src/scripts/wipePredictions.js --confirm=WIPE_PREDICTIONS"
+    );
     process.exit(1);
   }
   console.log(`[wipe-predictions] Tablas: ${TABLES.join(", ")}`);

@@ -1,9 +1,10 @@
 const { db } = require("../config/database");
 const { normalizeMatchHour } = require("../utils/matchHour");
 const {
-  normalizePickLabel,
-  normalizeTeamToken,
   fixtureTierDedupeKey,
+  marketDedupeKey,
+  pickHomeTeam,
+  pickAwayTeam,
 } = require("../utils/predictionDedupe");
 const { getFreePredictions } = require("../models/predictionModel");
 const { getVipPredictions } = require("../models/vipModel");
@@ -35,10 +36,8 @@ function todayIsoDate() {
 function mapPickToProductionRow(pick) {
   enrichPickLogos(pick);
 
-  const home =
-    pick.homeTeam?.name || pick.home_team_name || pick.team_a || "";
-  const away =
-    pick.awayTeam?.name || pick.away_team_name || pick.team_b || "";
+  const home = pickHomeTeam(pick);
+  const away = pickAwayTeam(pick);
   const matchDate = String(pick.date || pick.match_date || "").slice(0, 10);
   const matchHour = normalizeMatchHour(pick.hours || pick.match_hour);
   const prediction = scrubPlayStoreText(
@@ -75,11 +74,7 @@ function mapPickToProductionRow(pick) {
 }
 
 function productionDedupeKey(row) {
-  const home = normalizeTeamToken(row.home_team_name);
-  const away = normalizeTeamToken(row.away_team_name);
-  const date = String(row.match_date || "").slice(0, 10);
-  const market = normalizePickLabel(row.prediction);
-  return `${home}|${away}|${date}|${market}`;
+  return marketDedupeKey(row);
 }
 
 async function loadProductionKeysForDate(table, matchDate) {
@@ -117,30 +112,24 @@ async function publishPickToProduction(pick, tier = "free") {
   const dailyCap = getDailyCap(tier);
   const { data: dayRows } = await db
     .from(table)
-    .select("id")
+    .select("id,sport,home_team_name,away_team_name,prediction,confidence,match_date")
     .eq("match_date", row.match_date)
-    .limit(dailyCap + 5);
+    .limit(600);
   if ((dayRows || []).length >= dailyCap) {
     return { published: false, reason: "daily_cap", table, cap: dailyCap };
   }
 
-  const existing = await loadProductionKeysForDate(table, row.match_date);
+  const existing = new Set((dayRows || []).map((r) => productionDedupeKey(r)));
   const key = productionDedupeKey(row);
   const fixtureKey = fixtureTierDedupeKey(row);
   if (existing.has(key)) {
     return { published: false, reason: "duplicate", table };
   }
   // Máx. N tips/partido: el 2º solo con mercado distinto + confianza alta.
-  const { data: sameFixtureRows } = await db
-    .from(table)
-    .select("prediction,confidence")
-    .eq("match_date", row.match_date)
-    .eq("home_team_name", row.home_team_name)
-    .eq("away_team_name", row.away_team_name)
-    .limit(20);
+  const sameFixtureRows = (dayRows || []).filter((r) => fixtureTierDedupeKey(r) === fixtureKey);
   if (
     !shouldAcceptPickForFixture({
-      existingPicks: sameFixtureRows || [],
+      existingPicks: sameFixtureRows,
       candidate: row,
       tier,
     })
@@ -280,11 +269,13 @@ async function publishQueueDayToProduction(matchDate) {
 async function loadProductionFixtureKeysForDate(matchDate) {
   const freeKeys = new Set();
   const vipKeys = new Set();
+  const freeRows = [];
+  const vipRows = [];
   let freeCount = 0;
   let vipCount = 0;
-  for (const [tier, table, set] of [
-    ["free", FREE_PROD, freeKeys],
-    ["vip", VIP_PROD, vipKeys],
+  for (const [tier, table, set, bag] of [
+    ["free", FREE_PROD, freeKeys, freeRows],
+    ["vip", VIP_PROD, vipKeys, vipRows],
   ]) {
     try {
       const { data, error } = await db
@@ -298,12 +289,13 @@ async function loadProductionFixtureKeysForDate(matchDate) {
       else vipCount = rows.length;
       for (const row of rows) {
         set.add(fixtureTierDedupeKey(row));
+        bag.push(row);
       }
     } catch {
       /* noop */
     }
   }
-  return { free: freeKeys, vip: vipKeys, freeCount, vipCount };
+  return { free: freeKeys, vip: vipKeys, freeCount, vipCount, freeRows, vipRows };
 }
 
 module.exports = {

@@ -86,6 +86,16 @@ function startCronJobs() {
     }
   });
 
+  // Comunidad: hilos desde picks reales (estilo Reddit).
+  cron.schedule("20 * * * *", async () => {
+    try {
+      const { ensureCommunitySeed } = require("../services/communitySeedService");
+      await ensureCommunitySeed({ maxNew: 8 });
+    } catch (error) {
+      logger.warn(`[CRON] Comunidad seed falló: ${error.message}`);
+    }
+  });
+
   // Blog IA: previas del día. Cada 2h a los :15 (antes solo 3 veces al día y solo 4 artículos).
   // Configurable: BLOG_PREVIAS_CRON, BLOG_PREVIAS_MAX (default 12).
   const previasCron = process.env.BLOG_PREVIAS_CRON?.trim() || "15 */2 * * *";

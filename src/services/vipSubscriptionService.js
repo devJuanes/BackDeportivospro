@@ -1,35 +1,49 @@
 const logger = require("../utils/logger");
 const { executeRawSql } = require("../config/database");
 const { parsePfVipMetaFromReference } = require("./wompiService");
+const { minutesForPlan } = require("../config/vipPricing");
 
-/** Días sumados por etiqueta en referencia pfvip-*-(wk|mo|yr)- */
+/** Días/minutos por etiqueta de plan en referencia. */
 const PLAN_TAG_DAYS = { wk: 7, mo: 30, yr: 365 };
 
 function sqlEscape(str) {
   return String(str).replace(/'/g, "''");
 }
 
+function resolveGrantMinutes(meta) {
+  if (!meta) return 0;
+  if (meta.planTag === "mn" && Number.isFinite(meta.minutes) && meta.minutes > 0) {
+    return Math.floor(meta.minutes);
+  }
+  if (meta.planTag === "wk") return minutesForPlan("weekly");
+  if (meta.planTag === "yr") return minutesForPlan("annual");
+  if (meta.planTag === "mo") return minutesForPlan("monthly");
+  return 0;
+}
+
 /**
- * Idempotencia por `reference` Wompi (única por cobro): webhook y confirm-return no duplican días VIP.
- * @returns {{ granted: boolean, vipExpiresAt: string | null, alreadyRedeemed: boolean }}
+ * Idempotencia por `reference` (única por cobro): webhook y confirm-return no duplican tiempo VIP.
+ * Acumula sobre vip_expires_at vigente.
+ * @returns {{ granted: boolean, vipExpiresAt: string | null, alreadyRedeemed: boolean, minutes: number }}
  */
-async function grantVipAfterApprovedPayment(userId, reference, wompiTransactionId) {
+async function grantVipAfterApprovedPayment(userId, reference, paymentTransactionId) {
   const meta = parsePfVipMetaFromReference(reference);
   if (!meta || meta.userId !== userId) {
-    return { granted: false, vipExpiresAt: null, alreadyRedeemed: false };
+    return { granted: false, vipExpiresAt: null, alreadyRedeemed: false, minutes: 0 };
   }
-  const days = PLAN_TAG_DAYS[meta.planTag];
-  if (!days) return { granted: false, vipExpiresAt: null, alreadyRedeemed: false };
+  const minutes = resolveGrantMinutes(meta);
+  if (!minutes || minutes <= 0) {
+    return { granted: false, vipExpiresAt: null, alreadyRedeemed: false, minutes: 0 };
+  }
 
   const refEsc = sqlEscape(reference);
   const uidEsc = sqlEscape(userId);
   const tid =
-    wompiTransactionId != null && String(wompiTransactionId).trim()
-      ? sqlEscape(String(wompiTransactionId).trim())
+    paymentTransactionId != null && String(paymentTransactionId).trim()
+      ? sqlEscape(String(paymentTransactionId).trim())
       : null;
   const tidSql = tid ? `'${tid}'` : "NULL";
 
-  // user_id puede ser UUID legado o Firebase UID (texto)
   const sql = `
 WITH ins AS (
   INSERT INTO wompi_vip_redemptions (reference, wompi_transaction_id, user_id)
@@ -43,8 +57,8 @@ upd AS (
     vip_expires_at = (
       CASE
         WHEN vip_expires_at IS NOT NULL AND vip_expires_at > NOW()
-        THEN vip_expires_at + (${days}::text || ' days')::interval
-        ELSE NOW() + (${days}::text || ' days')::interval
+        THEN vip_expires_at + (${minutes}::text || ' minutes')::interval
+        ELSE NOW() + (${minutes}::text || ' minutes')::interval
       END
     ),
     updated_at = NOW()
@@ -66,11 +80,16 @@ SELECT
     const vipExpiresAt = row?.vip_expires_at ?? row?.VIP_EXPIRES_AT ?? null;
     const granted = inserted > 0 && vipExpiresAt != null;
     const alreadyRedeemed = inserted === 0;
-    if (granted) logger.info(`[vip] Otorgado por pago user=${userId} ref_tail=${reference.slice(-24)} days=${days}`);
+    if (granted) {
+      logger.info(
+        `[vip] Otorgado user=${userId} ref_tail=${reference.slice(-28)} minutes=${minutes}`,
+      );
+    }
     return {
       granted,
       vipExpiresAt: vipExpiresAt ? String(vipExpiresAt) : null,
       alreadyRedeemed,
+      minutes,
     };
   } catch (e) {
     logger.error("[vip] grantVipAfterApprovedPayment", e);
@@ -96,4 +115,5 @@ module.exports = {
   grantVipAfterApprovedPayment,
   expireStaleVipSubscriptions,
   PLAN_TAG_DAYS,
+  resolveGrantMinutes,
 };

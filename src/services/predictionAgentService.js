@@ -74,7 +74,7 @@ function buildAgentPrompt(brief, marketsPerMatch) {
     "Prioriza partidos top / clásicos / ligas fuertes. NO inventes tips flojos.",
     "1) research_summary: contexto liga, forma reciente, si es clásico/derby o partido top.",
     "2) analysis: estilo de juego, ritmo ofensivo, lesiones/rotaciones si se intuyen, corners/tarjetas si aplica.",
-    `3) free: hasta ${marketsPerMatch} tip(s) FREE; vip: hasta ${marketsPerMatch} tip(s) VIP distintos (más edge).`,
+    `3) free: 1 tip FREE; vip: 1 tip VIP de MERCADO DISTINTO (más edge). Máximo 2 tips por partido, nunca el mismo mercado repetido.`,
     "Estrategia: goles, BTTS, corners, tarjetas, handicaps — SOLO con lógica. Si no hay edge → free/vip [].",
     `Mercados sugeridos (${brief.sport}): ${brief.market_hints}`,
     "Confidence REALISTA: free 62-78, vip 74-90.",
@@ -208,17 +208,23 @@ async function runAgentPickPipeline(fixtures = [], callChatModel, opts = {}) {
           ? [aiJson.vip]
           : [];
       let added = 0;
-      freeRows.slice(0, Math.max(1, marketsPerMatch)).forEach((row, idx) => {
+      const perMatch = 1;
+      const usedLabels = new Set();
+      freeRows.slice(0, perMatch).forEach((row, idx) => {
         const rec = toPredictionRecord(fixture, "free", row, idx, shared);
         if (passesQualityGate(rec, "free")) {
           free.push(rec);
+          usedLabels.add(normalizePickLabel(rec.prediction || ""));
           added += 1;
         }
       });
-      vipRows.slice(0, Math.max(1, marketsPerMatch)).forEach((row, idx) => {
+      vipRows.slice(0, perMatch).forEach((row, idx) => {
         const rec = toPredictionRecord(fixture, "vip", row, idx, shared);
+        const label = normalizePickLabel(rec.prediction || "");
+        if (usedLabels.has(label)) return;
         if (passesQualityGate(rec, "vip")) {
           vip.push(rec);
+          usedLabels.add(label);
           added += 1;
         }
       });

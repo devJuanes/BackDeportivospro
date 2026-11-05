@@ -120,11 +120,44 @@ async function listTokensForPref(prefKey, limit = 500) {
 
   // Si no hay prefs/users aún, no spamear con tablas legacy globales
   // (solo tokens ligados a usuario con pref).
-  if (filtered.size > 0) return [...filtered];
+  if (filtered.size > 0) {
+    return { tokens: [...filtered], userIds: [...allowedUsers] };
+  }
 
   // Bootstrap: si nadie tiene prefs, enviar a todos los tokens registrados (primera fase).
-  if (tokens.size > 0 && prefs.size === 0) return [...tokens];
-  return [...filtered];
+  if (tokens.size > 0 && prefs.size === 0) {
+    return { tokens: [...tokens], userIds: [...new Set(userIds)] };
+  }
+  return { tokens: [...filtered], userIds: [...allowedUsers] };
+}
+
+async function writeInboxLogs(userIds = [], { title, body, data = {} }) {
+  const ids = [...new Set((userIds || []).map(String).filter(Boolean))].slice(0, 200);
+  if (!ids.length) return;
+  const now = new Date().toISOString();
+  const rows = ids.map((uid) => ({
+    app_id: "matupicks",
+    recipient_id: uid,
+    title: scrubPlayStoreText(title),
+    body: scrubPlayStoreText(body),
+    payload: data || {},
+    status: "sent",
+    created_at: now,
+    updated_at: now,
+  }));
+  try {
+    // Insertar por lotes pequeños para no saturar MatuDB
+    for (let i = 0; i < rows.length; i += 40) {
+      const chunk = rows.slice(i, i + 40);
+      const { error } = await db.from("notification_logs").insert(chunk);
+      if (error) {
+        logger.warn(`[push] inbox log: ${error.message}`);
+        break;
+      }
+    }
+  } catch (e) {
+    logger.warn(`[push] inbox log: ${e.message}`);
+  }
 }
 
 async function listTokensForUserIds(userIds = [], requireFollowedPref = true) {
@@ -186,49 +219,49 @@ async function sendToTokens(tokens, { title, body, data = {} }) {
 
 async function notifyNewPublishedPick(row, tier = "free") {
   const prefKey = tier === "vip" ? "vip" : "free";
-  const tokens = await listTokensForPref(prefKey);
+  const { tokens, userIds } = await listTokensForPref(prefKey);
   const home = row.home_team_name || row.homeTeam?.name || "Local";
   const away = row.away_team_name || row.awayTeam?.name || "Visitante";
-  return sendToTokens(tokens, {
-    title: tier === "vip" ? "Nuevo tip VIP" : "Nuevo tip del día",
-    body: `${home} vs ${away} · ${row.prediction || ""}`.slice(0, 180),
-    data: {
-      type: "new_pick",
-      tier: String(tier),
-      prediction_id: String(row.id || ""),
-    },
-  });
+  const title = tier === "vip" ? "Nuevo tip VIP" : "Nuevo tip del día";
+  const body = `${home} vs ${away} · ${row.prediction || ""}`.slice(0, 180);
+  const data = {
+    type: "new_pick",
+    tier: String(tier),
+    prediction_id: String(row.id || ""),
+  };
+  await writeInboxLogs(userIds, { title, body, data });
+  return sendToTokens(tokens, { title, body, data });
 }
 
 async function notifyLivePick(row) {
   const minConf = Number.parseInt(process.env.PUSH_LIVE_MIN_CONFIDENCE || "68", 10);
   if ((Number(row.confidence) || 0) < minConf) return { sentCount: 0, skipped: "low_confidence" };
-  const tokens = await listTokensForPref("live");
+  const { tokens, userIds } = await listTokensForPref("live");
   const hg = Number(row.home_goals) || 0;
   const ag = Number(row.away_goals) || 0;
   const home = row.home_team_name || "Local";
   const away = row.away_team_name || "Visitante";
-  return sendToTokens(tokens, {
-    title: "Tip en vivo",
-    body: `${home} ${hg}-${ag} ${away} · ${row.prediction || ""}`.slice(0, 180),
-    data: {
-      type: "live_pick",
-      prediction_id: String(row.id || ""),
-    },
-  });
+  const title = "Tip en vivo";
+  const body = `${home} ${hg}-${ag} ${away} · ${row.prediction || ""}`.slice(0, 180);
+  const data = {
+    type: "live_pick",
+    prediction_id: String(row.id || ""),
+  };
+  await writeInboxLogs(userIds, { title, body, data });
+  return sendToTokens(tokens, { title, body, data });
 }
 
 async function notifyNewsItem(row) {
-  const tokens = await listTokensForPref("news");
-  return sendToTokens(tokens, {
-    title: "Noticia MatuPicks",
-    body: String(row.title || row.summary || "Nueva noticia").slice(0, 180),
-    data: {
-      type: "news",
-      news_id: String(row.id || ""),
-      slug: String(row.slug || ""),
-    },
-  });
+  const { tokens, userIds } = await listTokensForPref("news");
+  const title = "Noticia MatuPicks";
+  const body = String(row.title || row.summary || "Nueva noticia").slice(0, 180);
+  const data = {
+    type: "news",
+    news_id: String(row.id || ""),
+    slug: String(row.slug || ""),
+  };
+  await writeInboxLogs(userIds, { title, body, data });
+  return sendToTokens(tokens, { title, body, data });
 }
 
 /**
@@ -255,21 +288,28 @@ async function notifyFollowedSettled(row, outcome = "won") {
 
   if (!userIds.length) return { sentCount: 0, reason: "no_followers" };
 
-  const tokens = await listTokensForUserIds(userIds, true);
+  const prefs = await loadPrefsByUserIds(userIds);
+  const allowedUserIds = userIds.filter((uid) => {
+    const p = prefs.get(uid) || defaultPrefs();
+    return p.followed !== false;
+  });
+  if (!allowedUserIds.length) return { sentCount: 0, reason: "prefs_off" };
+
+  const tokens = await listTokensForUserIds(allowedUserIds, false);
   const home = row.home_team_name || row.homeTeam?.name || "Local";
   const away = row.away_team_name || row.awayTeam?.name || "Visitante";
   const label = outcome === "won" ? "Acertado" : outcome === "lost" ? "Fallido" : "Anulado";
   const hg = Number(row.home_goals) || 0;
   const ag = Number(row.away_goals) || 0;
-  return sendToTokens(tokens, {
-    title: `Tip ${label}`,
-    body: `${home} ${hg}-${ag} ${away} · ${row.prediction || ""}`.slice(0, 180),
-    data: {
-      type: "followed_result",
-      outcome: String(outcome),
-      prediction_id: predictionId,
-    },
-  });
+  const title = `Tip ${label}`;
+  const body = `${home} ${hg}-${ag} ${away} · ${row.prediction || ""}`.slice(0, 180);
+  const data = {
+    type: "followed_result",
+    outcome: String(outcome),
+    prediction_id: predictionId,
+  };
+  await writeInboxLogs(allowedUserIds, { title, body, data });
+  return sendToTokens(tokens, { title, body, data });
 }
 
 module.exports = {
