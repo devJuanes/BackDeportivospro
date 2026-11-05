@@ -51,6 +51,12 @@ async function runNow(req, res, next) {
 
 async function setPower(req, res, next) {
   try {
+    if (!(await isAdminHttpRequest(req))) {
+      return res.status(403).json({
+        error: "forbidden",
+        message: "Se requiere administrador para pausar/activar la fábrica.",
+      });
+    }
     const enabled = req.body?.enabled === true;
     const state = setFactoryEnabled(enabled);
     res.json({

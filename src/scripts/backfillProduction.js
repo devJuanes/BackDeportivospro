@@ -48,12 +48,20 @@ async function backfillLogos(table, matchDate) {
 }
 
 async function dedupeTable(table, matchDate) {
-  let query = db.from(table).select("id,home_team_name,away_team_name,prediction,match_date,confidence,created_at").limit(800);
+  let query = db
+    .from(table)
+    .select("id,home_team_name,away_team_name,prediction,match_date,confidence,created_at,state,outcome")
+    .limit(800);
   if (matchDate) query = query.eq("match_date", matchDate);
   const { data, error } = await query;
   if (error) throw new Error(error.message);
   const seen = new Map();
   let removed = 0;
+  const settledRank = (row) => {
+    const s = String(row.state || row.outcome || "").toLowerCase();
+    if (s === "won" || s === "lost" || s === "void" || s === "ganada" || s === "perdida") return 2;
+    return 0;
+  };
   for (const row of data || []) {
     const key = productionDedupeKey(row);
     const prev = seen.get(key);
@@ -61,8 +69,23 @@ async function dedupeTable(table, matchDate) {
       seen.set(key, row);
       continue;
     }
-    const keep = (Number(row.confidence) || 0) >= (Number(prev.confidence) || 0) ? row : prev;
-    const drop = keep.id === row.id ? prev : row;
+    // NUNCA borrar un tip ya liquidado: preferir settled sobre pending.
+    const rankRow = settledRank(row);
+    const rankPrev = settledRank(prev);
+    let keep;
+    let drop;
+    if (rankRow !== rankPrev) {
+      keep = rankRow > rankPrev ? row : prev;
+      drop = keep.id === row.id ? prev : row;
+    } else {
+      keep = (Number(row.confidence) || 0) >= (Number(prev.confidence) || 0) ? row : prev;
+      drop = keep.id === row.id ? prev : row;
+    }
+    // Si el que sobraría borrar está liquidado, no borrar: conservar ambos.
+    if (settledRank(drop) > 0) {
+      seen.set(key, keep);
+      continue;
+    }
     seen.set(key, keep);
     const d = await db.from(table).eq("id", drop.id).delete();
     if (!d.error) removed += 1;
@@ -81,6 +104,9 @@ async function runBackfillProduction(options = {}) {
 
   let deduped = 0;
   if (dedupe) {
+    const { runDedupePredictions } = require("./dedupePredictions");
+    const cleaned = await runDedupePredictions({ date: day });
+    deduped = (cleaned.results || []).reduce((n, r) => n + (r.removed || 0), 0);
     deduped += await dedupeTable(FREE, day);
     deduped += await dedupeTable(VIP, day);
   }

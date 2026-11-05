@@ -1,6 +1,7 @@
 const { estimateOddsFromConfidence } = require("./oddsService");
 const { clamp } = require("../utils/helpers");
 const { resolveTeamLogoUrl } = require("./futboolLogoService");
+const { getMaxPicksPerMatch, marketFamily } = require("../utils/pickVolume");
 
 const MARKET_TEMPLATES = {
   football: {
@@ -85,12 +86,18 @@ function hashString(value = "") {
   return Math.abs(hash);
 }
 
-function pickTemplateByFixture(fixture, tier) {
+function pickTemplateByFixture(fixture, tier, slot = 0) {
   const sportTemplates = MARKET_TEMPLATES[fixture.sport] || MARKET_TEMPLATES.football;
   const pool = sportTemplates[tier] || sportTemplates.free;
-  const seed = `${fixture.eventId || ""}|${fixture.homeTeam}|${fixture.awayTeam}|${tier}`;
-  const index = hashString(seed) % pool.length;
-  return pool[index];
+  const seed = `${fixture.homeTeam}|${fixture.awayTeam}|${tier}|${fixture.match_date || ""}`;
+  const start = hashString(seed) % pool.length;
+  if (slot <= 0) return pool[start];
+  const firstFam = marketFamily(pool[start].market);
+  for (let i = 1; i < pool.length; i += 1) {
+    const cand = pool[(start + i) % pool.length];
+    if (marketFamily(cand.market) !== firstFam) return cand;
+  }
+  return pool[(start + slot) % pool.length];
 }
 
 function parseTeams(matchText = "", league = "") {
@@ -256,8 +263,8 @@ function buildTierPredictionsFromScraped(
   return out;
 }
 
-function buildPredictionFromFixture(fixture, tier = "free") {
-  const market = pickTemplateByFixture(fixture, tier);
+function buildPredictionFromFixture(fixture, tier = "free", slot = 0) {
+  const market = pickTemplateByFixture(fixture, tier, slot);
   const bias = (fixture.homeGoals || 0) - (fixture.awayGoals || 0);
   const variation = (hashString(fixture.eventId || `${fixture.homeTeam}-${fixture.awayTeam}`) % 7) - 3;
   const confidence = clamp(
@@ -311,13 +318,17 @@ function buildPredictionsFromFixtures(fixtures = [], limits = { free: 10, vip: 1
     }
     seen.add(key);
 
-    const freeMarketsPerMatch = Number.parseInt(process.env.FACTORY_RULE_MARKETS_PER_MATCH || "1", 10);
-    const vipMarketsPerMatch = Math.max(1, freeMarketsPerMatch + 1);
+    const maxPerMatch = getMaxPicksPerMatch();
+    const freeMarketsPerMatch = Math.min(
+      maxPerMatch,
+      Math.max(1, Number.parseInt(process.env.FACTORY_RULE_MARKETS_PER_MATCH || "1", 10) || 1)
+    );
+    const vipMarketsPerMatch = Math.min(maxPerMatch, freeMarketsPerMatch);
     for (let i = 0; i < freeMarketsPerMatch && free.length < limits.free; i += 1) {
-      free.push(buildPredictionFromFixture({ ...fixture, eventId: `${fixture.eventId || key}-f${i}` }, "free"));
+      free.push(buildPredictionFromFixture(fixture, "free", i));
     }
     for (let i = 0; i < vipMarketsPerMatch && vip.length < limits.vip; i += 1) {
-      vip.push(buildPredictionFromFixture({ ...fixture, eventId: `${fixture.eventId || key}-v${i}` }, "vip"));
+      vip.push(buildPredictionFromFixture(fixture, "vip", i));
     }
     if (free.length >= limits.free && vip.length >= limits.vip) {
       break;
@@ -328,123 +339,75 @@ function buildPredictionsFromFixtures(fixtures = [], limits = { free: 10, vip: 1
 }
 
 function generateLiveSuggestion(match) {
+  const sport = String(match.sport || "football").toLowerCase();
   const total = (match.homeGoals || 0) + (match.awayGoals || 0);
   const diff = Math.abs((match.homeGoals || 0) - (match.awayGoals || 0));
   const minute = match.minute || 0;
-
-  if (minute < 0) {
-    return null;
-  }
-  if (minute === 0 && total === 0) {
-    return null;
-  }
-
-  if (match.sport === "football" && minute >= 70 && total === 0) {
-    return {
-      sport: match.sport || "football",
-      league: match.league || "Live League",
-      home_team_name: match.homeTeam,
-      away_team_name: match.awayTeam,
-      minute,
-      prediction: "Over 0.5 goles",
-      confidence: 74,
-      odds: 1.38,
-    };
-  }
-
-  if (match.sport === "football" && minute >= 55 && total === 1 && diff <= 1) {
-    return {
-      sport: match.sport || "football",
-      league: match.league || "Live League",
-      home_team_name: match.homeTeam,
-      away_team_name: match.awayTeam,
-      minute,
-      prediction: "Over 1.5 goles",
-      confidence: 68,
-      odds: 1.62,
-    };
-  }
-
-  if (match.sport === "football" && minute >= 35 && minute <= 75 && total >= 2 && diff <= 2) {
-    return {
-      sport: match.sport || "football",
-      league: match.league || "Live League",
-      home_team_name: match.homeTeam,
-      away_team_name: match.awayTeam,
-      minute,
-      prediction: "Over 2.5 goles",
-      confidence: 67,
-      odds: 1.66,
-    };
-  }
-
-  if (match.sport === "basketball" && minute >= 24 && total >= 120 && diff <= 18) {
-    return {
-      sport: match.sport,
-      league: match.league || "Live League",
-      home_team_name: match.homeTeam,
-      away_team_name: match.awayTeam,
-      minute,
-      prediction: "Más de 169.5 puntos en vivo",
-      confidence: 69,
-      odds: 1.64,
-    };
-  }
-
-  if (match.sport === "football" && minute >= 16 && minute <= 44 && total >= 2 && diff <= 2) {
-    return {
-      sport: match.sport || "football",
-      league: match.league || "Live League",
-      home_team_name: match.homeTeam,
-      away_team_name: match.awayTeam,
-      minute,
-      prediction: "Más de 2.5 goles",
-      confidence: 64,
-      odds: 1.58,
-    };
-  }
-
   const hg = match.homeGoals || 0;
   const ag = match.awayGoals || 0;
-  if (match.sport === "football" && minute >= 22 && minute <= 78) {
-    if ((hg === 0 && ag >= 2) || (ag === 0 && hg >= 2)) {
+  const base = {
+    sport,
+    league: match.league || "Live League",
+    home_team_name: match.homeTeam,
+    away_team_name: match.awayTeam,
+    minute,
+    home_goals: hg,
+    away_goals: ag,
+  };
+
+  if (minute < 20) return null;
+  if (minute === 0 && total === 0) return null;
+
+  if (sport === "football" || sport === "soccer") {
+    // Favorito aparente abajo tarde — next goal (solo tramo claro)
+    if (minute >= 65 && minute <= 85 && diff === 1 && total <= 3) {
+      const trailing = hg < ag ? match.homeTeam : match.awayTeam;
       return {
-        sport: match.sport || "football",
-        league: match.league || "Live League",
-        home_team_name: match.homeTeam,
-        away_team_name: match.awayTeam,
-        minute,
-        prediction: "Ambos equipos marcan: SI",
-        confidence: 62,
-        odds: 1.74,
+        ...base,
+        prediction: `Siguiente gol: ${trailing}`,
+        confidence: 66,
+        odds: 1.85,
+        analysis: `Marcador ${hg}-${ag} al ${minute}'. Remonte selectivo del que va abajo; no over ciego.`,
       };
     }
+
+    // BTTS solo si va 1-0 / 0-1 en tramo medio
+    if (minute >= 55 && minute <= 78 && total === 1 && diff === 1) {
+      return {
+        ...base,
+        prediction: "Ambos equipos marcan: SI",
+        confidence: 65,
+        odds: 1.72,
+        analysis: `Va ${hg}-${ag}. El que pierde busca el empate; BTTS con más lógica que overs agresivos.`,
+      };
+    }
+
+    // Ritmo alto temprano → over 2.5 solo si aún no se cumplió
+    if (minute >= 30 && minute <= 58 && total === 2 && diff <= 2) {
+      return {
+        ...base,
+        prediction: "Más de 2.5 goles",
+        confidence: 67,
+        odds: 1.68,
+        analysis: `Ritmo alto (2 goles antes del ${minute}'). Over 2.5 coherente; se cierra al 3er gol.`,
+      };
+    }
+
+    // Nunca tips de corners/tarjetas ni overs ya cumplidos / absurdos (7.5 etc.)
+    return null;
   }
 
-  if (match.sport === "football" && minute >= 48 && minute <= 82 && total === 1 && diff === 1) {
-    return {
-      sport: match.sport || "football",
-      league: match.league || "Live League",
-      home_team_name: match.homeTeam,
-      away_team_name: match.awayTeam,
-      minute,
-      prediction: "Más de 1.5 goles",
-      confidence: 63,
-      odds: 1.52,
-    };
-  }
-
-  if (match.sport === "football" && minute >= 52 && minute <= 84 && total >= 3 && diff <= 2) {
-    return {
-      sport: match.sport || "football",
-      league: match.league || "Live League",
-      home_team_name: match.homeTeam,
-      away_team_name: match.awayTeam,
-      minute,
-      prediction: "Más de 3.5 goles",
-      confidence: 61,
-      odds: 1.68,
-    };
+  if (sport === "basketball") {
+    if (minute >= 28 && total >= 110 && diff <= 12) {
+      return {
+        ...base,
+        prediction: "Ritmo alto: más puntos del total en vivo",
+        confidence: 62,
+        odds: 1.7,
+        analysis: `Marcador ${hg}-${ag} con margen corto.`,
+      };
+    }
+    return null;
   }
 
   return null;

@@ -35,8 +35,11 @@ async function listFreePredictions(req, res, next) {
   try {
     const rawLimit = Number.parseInt(String(req.query.limit || "100"), 10);
     const limit = Number.isFinite(rawLimit) ? Math.min(400, Math.max(1, rawLimit)) : 100;
+    // Por defecto: solo hoy (alineado con /api/v1/predictions). Histórico: ?all=true o ?today=false
+    const showAll = req.query.all === "true" || req.query.today === "false";
+    const todayOnly = req.query.today === "true" || (!showAll && req.query.today !== "false");
     const rows = await getFreePredictions(limit, {
-      todayOnly: req.query.today === "true",
+      todayOnly,
       sport: req.query.sport,
       date: req.query.date,
     });

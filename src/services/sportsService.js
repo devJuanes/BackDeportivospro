@@ -460,6 +460,7 @@ async function getLiveMatchesBySport(sport = "football") {
       const statusShort = event?.status?.type?.shortDetail || "";
       return {
         sport,
+        eventId: event.id || null,
         league: parseLeague(event),
         homeTeam: teams.homeTeam,
         awayTeam: teams.awayTeam,

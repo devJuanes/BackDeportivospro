@@ -1,75 +1,321 @@
 /**
- * Push FCM cuando hay tips nuevos o en vivo (requiere Firebase + tokens registrados).
+ * Push FCM respetando preferencias y follows.
+ * Tokens: notification_tokens (+ fallback pf_users.fcm_token / project_push_tokens).
  */
 const logger = require("../utils/logger");
 const { db } = require("../config/database");
 const { sendPushToTokens } = require("./firebasePushService");
 const { scrubPlayStoreText } = require("../utils/playStoreSafe");
 
-async function listMatupicksTokens(limit = 500) {
-  const tokens = new Set();
-  for (const table of ["project_push_tokens", "mp_push_tokens"]) {
-    try {
-      const { data, error } = await db.from(table).select("fcm_token,token").limit(limit);
-      if (error) continue;
-      for (const row of data || []) {
-        const t = row.fcm_token || row.token;
-        if (t) tokens.add(String(t).trim());
-      }
-    } catch {
-      /* tabla opcional */
-    }
-  }
-  return [...tokens];
+function pushEnabled() {
+  return String(process.env.PREDICTION_PUSH_ENABLED || "true").toLowerCase() !== "false";
 }
 
-async function broadcastPush({ title, body, data = {} }) {
-  if (String(process.env.PREDICTION_PUSH_ENABLED || "true").toLowerCase() === "false") {
-    return { sentCount: 0, skipped: true };
+async function loadPrefsByUserIds(userIds = []) {
+  const map = new Map();
+  if (!userIds.length) return map;
+  try {
+    const { data, error } = await db
+      .from("pf_notification_prefs")
+      .select("user_id,notif_live,notif_free,notif_vip,notif_news,notif_followed")
+      .in("user_id", userIds)
+      .limit(Math.min(800, userIds.length + 10));
+    if (error) return map;
+    for (const row of data || []) {
+      map.set(String(row.user_id), {
+        live: row.notif_live !== false,
+        free: row.notif_free !== false,
+        vip: row.notif_vip !== false,
+        news: row.notif_news === true,
+        followed: row.notif_followed !== false,
+      });
+    }
+  } catch {
+    /* ignore */
   }
-  const tokens = await listMatupicksTokens();
-  if (!tokens.length) return { sentCount: 0, reason: "no_tokens" };
+  return map;
+}
+
+/** default prefs if user never saved */
+function defaultPrefs() {
+  return { live: true, free: true, vip: true, news: false, followed: true };
+}
+
+async function listTokensForPref(prefKey, limit = 500) {
+  const tokens = new Set();
+  const userIds = [];
+
+  // 1) notification_tokens (registro oficial)
+  try {
+    const { data, error } = await db
+      .from("notification_tokens")
+      .select("user_id,token")
+      .eq("app_id", "matupicks")
+      .limit(limit);
+    if (!error) {
+      for (const row of data || []) {
+        if (row.user_id) userIds.push(String(row.user_id));
+        if (row.token) tokens.add(String(row.token).trim());
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+
+  // 2) pf_users.fcm_token
+  try {
+    const { data, error } = await db
+      .from("pf_users")
+      .select("id,fcm_token")
+      .not("fcm_token", "is", null)
+      .limit(limit);
+    if (!error) {
+      for (const row of data || []) {
+        if (row.id) userIds.push(String(row.id));
+        if (row.fcm_token) tokens.add(String(row.fcm_token).trim());
+      }
+    }
+  } catch {
+    /* columna puede no existir aún */
+  }
+
+  // Filtrar por preferencia
+  const prefs = await loadPrefsByUserIds([...new Set(userIds)]);
+  const allowedUsers = new Set();
+  for (const uid of [...new Set(userIds)]) {
+    const p = prefs.get(uid) || defaultPrefs();
+    if (p[prefKey]) allowedUsers.add(uid);
+  }
+
+  // Reconstruir tokens solo de usuarios con pref activa
+  const filtered = new Set();
+  try {
+    const { data } = await db
+      .from("notification_tokens")
+      .select("user_id,token")
+      .eq("app_id", "matupicks")
+      .limit(limit);
+    for (const row of data || []) {
+      if (allowedUsers.has(String(row.user_id)) && row.token) {
+        filtered.add(String(row.token).trim());
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  try {
+    const { data } = await db
+      .from("pf_users")
+      .select("id,fcm_token")
+      .not("fcm_token", "is", null)
+      .limit(limit);
+    for (const row of data || []) {
+      if (allowedUsers.has(String(row.id)) && row.fcm_token) {
+        filtered.add(String(row.fcm_token).trim());
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+
+  // Si no hay prefs/users aún, no spamear con tablas legacy globales
+  // (solo tokens ligados a usuario con pref).
+  if (filtered.size > 0) {
+    return { tokens: [...filtered], userIds: [...allowedUsers] };
+  }
+
+  // Bootstrap: si nadie tiene prefs, enviar a todos los tokens registrados (primera fase).
+  if (tokens.size > 0 && prefs.size === 0) {
+    return { tokens: [...tokens], userIds: [...new Set(userIds)] };
+  }
+  return { tokens: [...filtered], userIds: [...allowedUsers] };
+}
+
+async function writeInboxLogs(userIds = [], { title, body, data = {} }) {
+  const ids = [...new Set((userIds || []).map(String).filter(Boolean))].slice(0, 200);
+  if (!ids.length) return;
+  const now = new Date().toISOString();
+  const rows = ids.map((uid) => ({
+    app_id: "matupicks",
+    recipient_id: uid,
+    title: scrubPlayStoreText(title),
+    body: scrubPlayStoreText(body),
+    payload: data || {},
+    status: "sent",
+    created_at: now,
+    updated_at: now,
+  }));
+  try {
+    // Insertar por lotes pequeños para no saturar MatuDB
+    for (let i = 0; i < rows.length; i += 40) {
+      const chunk = rows.slice(i, i + 40);
+      const { error } = await db.from("notification_logs").insert(chunk);
+      if (error) {
+        logger.warn(`[push] inbox log: ${error.message}`);
+        break;
+      }
+    }
+  } catch (e) {
+    logger.warn(`[push] inbox log: ${e.message}`);
+  }
+}
+
+async function listTokensForUserIds(userIds = [], requireFollowedPref = true) {
+  const ids = [...new Set((userIds || []).map(String).filter(Boolean))];
+  if (!ids.length) return [];
+  const prefs = await loadPrefsByUserIds(ids);
+  const allowed = ids.filter((uid) => {
+    const p = prefs.get(uid) || defaultPrefs();
+    return requireFollowedPref ? p.followed !== false : true;
+  });
+  if (!allowed.length) return [];
+
+  const out = new Set();
+  try {
+    const { data } = await db
+      .from("notification_tokens")
+      .select("user_id,token")
+      .in("user_id", allowed)
+      .eq("app_id", "matupicks")
+      .limit(500);
+    for (const row of data || []) {
+      if (row.token) out.add(String(row.token).trim());
+    }
+  } catch {
+    /* ignore */
+  }
+  try {
+    const { data } = await db
+      .from("pf_users")
+      .select("id,fcm_token")
+      .in("id", allowed)
+      .limit(500);
+    for (const row of data || []) {
+      if (row.fcm_token) out.add(String(row.fcm_token).trim());
+    }
+  } catch {
+    /* ignore */
+  }
+  return [...out];
+}
+
+async function sendToTokens(tokens, { title, body, data = {} }) {
+  if (!pushEnabled()) return { sentCount: 0, skipped: true };
+  const clean = (tokens || []).filter(Boolean);
+  if (!clean.length) return { sentCount: 0, reason: "no_tokens" };
   try {
     return await sendPushToTokens({
-      tokens,
+      tokens: clean,
       title: scrubPlayStoreText(title),
       body: scrubPlayStoreText(body),
       data,
       channelId: "matupicks_tips",
     });
   } catch (error) {
-    logger.warn(`[push-tips] ${error.message}`);
+    logger.warn(`[push] ${error.message}`);
     return { sentCount: 0, error: error.message };
   }
 }
 
 async function notifyNewPublishedPick(row, tier = "free") {
+  const prefKey = tier === "vip" ? "vip" : "free";
+  const { tokens, userIds } = await listTokensForPref(prefKey);
   const home = row.home_team_name || row.homeTeam?.name || "Local";
   const away = row.away_team_name || row.awayTeam?.name || "Visitante";
-  return broadcastPush({
-    title: tier === "vip" ? "Nuevo tip VIP" : "Nuevo tip del día",
-    body: `${home} vs ${away} · ${row.prediction || ""}`.slice(0, 180),
-    data: { type: "new_pick", tier: String(tier) },
-  });
+  const title = tier === "vip" ? "Nuevo tip VIP" : "Nuevo tip del día";
+  const body = `${home} vs ${away} · ${row.prediction || ""}`.slice(0, 180);
+  const data = {
+    type: "new_pick",
+    tier: String(tier),
+    prediction_id: String(row.id || ""),
+  };
+  await writeInboxLogs(userIds, { title, body, data });
+  return sendToTokens(tokens, { title, body, data });
 }
 
 async function notifyLivePick(row) {
   const minConf = Number.parseInt(process.env.PUSH_LIVE_MIN_CONFIDENCE || "68", 10);
   if ((Number(row.confidence) || 0) < minConf) return { sentCount: 0, skipped: "low_confidence" };
+  const { tokens, userIds } = await listTokensForPref("live");
   const hg = Number(row.home_goals) || 0;
   const ag = Number(row.away_goals) || 0;
   const home = row.home_team_name || "Local";
   const away = row.away_team_name || "Visitante";
-  return broadcastPush({
-    title: "Tip en vivo",
-    body: `${home} ${hg}-${ag} ${away} · ${row.prediction || ""}`.slice(0, 180),
-    data: { type: "live_pick" },
+  const title = "Tip en vivo";
+  const body = `${home} ${hg}-${ag} ${away} · ${row.prediction || ""}`.slice(0, 180);
+  const data = {
+    type: "live_pick",
+    prediction_id: String(row.id || ""),
+  };
+  await writeInboxLogs(userIds, { title, body, data });
+  return sendToTokens(tokens, { title, body, data });
+}
+
+async function notifyNewsItem(row) {
+  const { tokens, userIds } = await listTokensForPref("news");
+  const title = "Noticia MatuPicks";
+  const body = String(row.title || row.summary || "Nueva noticia").slice(0, 180);
+  const data = {
+    type: "news",
+    news_id: String(row.id || ""),
+    slug: String(row.slug || ""),
+  };
+  await writeInboxLogs(userIds, { title, body, data });
+  return sendToTokens(tokens, { title, body, data });
+}
+
+/**
+ * Aviso a seguidores cuando un tip pasa a won/lost.
+ */
+async function notifyFollowedSettled(row, outcome = "won") {
+  const predictionId = String(row.id || row.prediction_id || "").trim();
+  if (!predictionId) return { sentCount: 0, reason: "no_id" };
+  if (outcome !== "won" && outcome !== "lost" && outcome !== "void") {
+    return { sentCount: 0, reason: "bad_outcome" };
+  }
+
+  let userIds = [];
+  try {
+    const { data, error } = await db
+      .from("pf_prediction_follows")
+      .select("user_id")
+      .eq("prediction_id", predictionId)
+      .limit(400);
+    if (!error) userIds = (data || []).map((r) => String(r.user_id)).filter(Boolean);
+  } catch {
+    /* ignore */
+  }
+
+  if (!userIds.length) return { sentCount: 0, reason: "no_followers" };
+
+  const prefs = await loadPrefsByUserIds(userIds);
+  const allowedUserIds = userIds.filter((uid) => {
+    const p = prefs.get(uid) || defaultPrefs();
+    return p.followed !== false;
   });
+  if (!allowedUserIds.length) return { sentCount: 0, reason: "prefs_off" };
+
+  const tokens = await listTokensForUserIds(allowedUserIds, false);
+  const home = row.home_team_name || row.homeTeam?.name || "Local";
+  const away = row.away_team_name || row.awayTeam?.name || "Visitante";
+  const label = outcome === "won" ? "Acertado" : outcome === "lost" ? "Fallido" : "Anulado";
+  const hg = Number(row.home_goals) || 0;
+  const ag = Number(row.away_goals) || 0;
+  const title = `Tip ${label}`;
+  const body = `${home} ${hg}-${ag} ${away} · ${row.prediction || ""}`.slice(0, 180);
+  const data = {
+    type: "followed_result",
+    outcome: String(outcome),
+    prediction_id: predictionId,
+  };
+  await writeInboxLogs(allowedUserIds, { title, body, data });
+  return sendToTokens(tokens, { title, body, data });
 }
 
 module.exports = {
-  broadcastPush,
   notifyNewPublishedPick,
   notifyLivePick,
-  listMatupicksTokens,
+  notifyNewsItem,
+  notifyFollowedSettled,
+  listTokensForPref,
 };

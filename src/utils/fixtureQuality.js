@@ -86,8 +86,8 @@ function passesQualityGate(record, tier = "free") {
   const pick = record.prediction || record.pick || "";
   if (isGarbagePickLabel(pick)) return false;
 
-  const home = record.homeTeam?.name || record.home_team_name || "";
-  const away = record.awayTeam?.name || record.away_team_name || "";
+  const home = record.homeTeam?.name || record.home_team || record.home_team_name || record.team_a || "";
+  const away = record.awayTeam?.name || record.away_team || record.away_team_name || record.team_b || "";
   if (isPlaceholderTeam(home) || isPlaceholderTeam(away)) return false;
 
   const conf = Number(record.confidence);

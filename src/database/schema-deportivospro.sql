@@ -220,6 +220,8 @@ CREATE TABLE IF NOT EXISTS pf_users (
 );
 
 ALTER TABLE pf_users ADD COLUMN IF NOT EXISTS firebase_uid TEXT;
+ALTER TABLE pf_users ADD COLUMN IF NOT EXISTS favorite_team TEXT;
+ALTER TABLE pf_users ADD COLUMN IF NOT EXISTS favorite_league TEXT;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_pf_users_firebase_uid ON pf_users (firebase_uid) WHERE firebase_uid IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_pf_users_phone ON pf_users (phone);
 CREATE INDEX IF NOT EXISTS idx_pf_users_email ON pf_users (email);
@@ -415,6 +417,25 @@ CREATE TABLE IF NOT EXISTS notification_logs (
 
 CREATE INDEX IF NOT EXISTS idx_notification_tokens_user ON notification_tokens (user_id);
 CREATE INDEX IF NOT EXISTS idx_notification_logs_recipient ON notification_logs (recipient_id, created_at DESC);
+
+-- ─── Solicitudes de acceso VIP (app Flutter) ───────────────────────────────
+
+CREATE TABLE IF NOT EXISTS vip_requests (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id TEXT NOT NULL,
+  user_email TEXT,
+  user_name TEXT,
+  phone TEXT,
+  status TEXT NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending', 'approved', 'rejected')),
+  message TEXT,
+  notes TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_vip_requests_user_id ON vip_requests (user_id);
+CREATE INDEX IF NOT EXISTS idx_vip_requests_status_created ON vip_requests (status, created_at DESC);
 
 -- ─── Blog extras en news_articles ──────────────────────────────────────────
 

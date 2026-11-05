@@ -14,17 +14,25 @@ const {
   publishPickToProduction,
   loadProductionFixtureKeysForDate,
 } = require("../services/productionPublishService");
-const { mergeDedupeByKey, normalizePickLabel, fixtureTierDedupeKey, normalizeTeamToken, pairKey } = require("../utils/predictionDedupe");
+const {
+  mergeDedupeByKey,
+  fixtureTierDedupeKey,
+  marketDedupeKey,
+  normalizeTeamToken,
+  pairKey,
+} = require("../utils/predictionDedupe");
 const { filterFixturesForTips, filterQualityPicks } = require("../utils/fixtureQuality");
+const {
+  getDailyCap,
+  getMaxPicksPerMatch,
+  shouldAcceptPickForFixture,
+  selectTopPicksPerFixture,
+} = require("../utils/pickVolume");
 const { formatDateInTimezone } = require("../utils/helpers");
 const logger = require("../utils/logger");
 
 function buildMatchKey(row) {
-  const home = row.homeTeam?.name || row.home_team_name || row.team_a || "";
-  const away = row.awayTeam?.name || row.away_team_name || row.team_b || "";
-  const date = row.date || row.match_date || "";
-  const market = normalizePickLabel(row.prediction || row.pick_text || "");
-  return `${home.toLowerCase()}|${away.toLowerCase()}|${date}|${market}`;
+  return marketDedupeKey(row);
 }
 
 function fixtureKeyForTier(fixture, sport) {
@@ -107,32 +115,75 @@ async function runPredictionPipeline(options = {}) {
     return sourcePolicy.vip_hosts.length === 0 || sourcePolicy.vip_hosts.includes(host);
   });
 
-  /** Existentes del día: claves por fixture+tier para NO gastar IA en partidos ya cubiertos. */
+  const maxPerMatch = getMaxPicksPerMatch();
+  const dailyCapFree = getDailyCap("free");
+  const dailyCapVip = getDailyCap("vip");
+
+  /** Existentes del día: claves por mercado + lista por partido (máx. N tips). */
   const [existingFree, existingVip] = await Promise.all([
-    getFreePredictions(500, { todayOnly: true, date: calendarDayIso, sport }),
-    getVipPredictions(500, { todayOnly: true, date: calendarDayIso, sport }),
+    getFreePredictions(500, { todayOnly: true, date: calendarDayIso, sport, collapse: false }),
+    getVipPredictions(500, { todayOnly: true, date: calendarDayIso, sport, collapse: false }),
   ]);
   const existingFreeKeys = new Set(existingFree.map(buildMatchKey));
   const existingVipKeys = new Set(existingVip.map(buildMatchKey));
-  const existingFixtureFree = new Set(existingFree.map((r) => fixtureTierDedupeKey(r)));
-  const existingFixtureVip = new Set(existingVip.map((r) => fixtureTierDedupeKey(r)));
+  /** fixtureKey → picks ya guardados (cola + planta). */
+  const picksByFixtureFree = new Map();
+  const picksByFixtureVip = new Map();
+  const addExisting = (map, row) => {
+    const k = fixtureTierDedupeKey(row);
+    if (!k) return;
+    if (!map.has(k)) map.set(k, []);
+    map.get(k).push(row);
+  };
+  for (const r of existingFree) addExisting(picksByFixtureFree, r);
+  for (const r of existingVip) addExisting(picksByFixtureVip, r);
 
-  /** También considerar lo ya publicado en planta (abet/abetvip) para no duplicar dev+prod. */
+  /** También considerar lo ya publicado en planta (abet/abetvip) para no duplicar local+prod. */
+  let plantFreeCount = 0;
+  let plantVipCount = 0;
   try {
     const prodKeys = await loadProductionFixtureKeysForDate(calendarDayIso);
-    for (const k of prodKeys.free) existingFixtureFree.add(k);
-    for (const k of prodKeys.vip) existingFixtureVip.add(k);
+    plantFreeCount = prodKeys.freeCount || prodKeys.free?.size || 0;
+    plantVipCount = prodKeys.vipCount || prodKeys.vip?.size || 0;
+    for (const row of prodKeys.freeRows || []) {
+      addExisting(picksByFixtureFree, row);
+      existingFreeKeys.add(buildMatchKey(row));
+    }
+    for (const row of prodKeys.vipRows || []) {
+      addExisting(picksByFixtureVip, row);
+      existingVipKeys.add(buildMatchKey(row));
+    }
   } catch (error) {
     logger.warn(`[pipeline] claves planta ${calendarDayIso}: ${error.message}`);
   }
 
-  /** Fixtures sin pick FREE y sin pick VIP (lo que falta cubrir HOY). Mantiene orden de prioridad. */
-  const uncoveredForFree = fixturesByPriority.filter(
-    (f) => !existingFixtureFree.has(fixtureKeyForTier(f, sport))
-  );
-  const uncoveredForVip = fixturesByPriority.filter(
-    (f) => !existingFixtureVip.has(fixtureKeyForTier(f, sport))
-  );
+  const freeDayTotal = Math.max(existingFree.length, plantFreeCount);
+  const vipDayTotal = Math.max(existingVip.length, plantVipCount);
+  if (freeDayTotal >= dailyCapFree && vipDayTotal >= dailyCapVip) {
+    logger.info(
+      `[pipeline] tope diario alcanzado (${sport}) free=${freeDayTotal}/${dailyCapFree} vip=${vipDayTotal}/${dailyCapVip} — skip`
+    );
+    return {
+      free: 0,
+      vip: 0,
+      published_free: 0,
+      published_vip: 0,
+      sport,
+      latam_only: latamOnly,
+      skipped_daily_cap: true,
+      fixtures_total: fixtures.length,
+    };
+  }
+
+  /** Fixtures sin cubrir del todo (menos de maxPerMatch tips). */
+  const uncoveredForFree = fixturesByPriority.filter((f) => {
+    const k = fixtureKeyForTier(f, sport);
+    return (picksByFixtureFree.get(k) || []).length < maxPerMatch;
+  });
+  const uncoveredForVip = fixturesByPriority.filter((f) => {
+    const k = fixtureKeyForTier(f, sport);
+    return (picksByFixtureVip.get(k) || []).length < maxPerMatch;
+  });
 
   /** IA: prioriza fixtures sin cubrir (free o vip). Si ya está todo cubierto, usa los top normales. */
   const aiTargetSet = new Map();
@@ -166,25 +217,21 @@ async function runPredictionPipeline(options = {}) {
     batchVip
   );
 
-  /** IA → scrapers → motor fixtures; sin repetir mercado; luego un solo pick por partido/día y tier. */
-  const freePicks = filterQualityPicks(
-    mergeDedupeByKey(
-      [
-        mergeDedupeByKey([aiFromFixtures.free, fromScrapers.free, fromFixtures.free], buildMatchKey),
-      ],
-      fixtureTierDedupeKey
+  /** IA → scrapers → motor; sin mercado duplicado; máx. N tips/partido (calidad). */
+  const freePicks = selectTopPicksPerFixture(
+    filterQualityPicks(
+      mergeDedupeByKey([aiFromFixtures.free, fromScrapers.free, fromFixtures.free], buildMatchKey),
+      "free"
     ),
     "free"
   );
-  const vipPicks = filterQualityPicks(
-    mergeDedupeByKey(
-      [
-        mergeDedupeByKey(
-          [aiFromFixtures.vip, vipFromReliableScrapers, fromFixtures.vip, fromScrapers.vip],
-          buildMatchKey
-        ),
-      ],
-      fixtureTierDedupeKey
+  const vipPicks = selectTopPicksPerFixture(
+    filterQualityPicks(
+      mergeDedupeByKey(
+        [aiFromFixtures.vip, vipFromReliableScrapers, fromFixtures.vip, fromScrapers.vip],
+        buildMatchKey
+      ),
+      "vip"
     ),
     "vip"
   );
@@ -193,16 +240,35 @@ async function runPredictionPipeline(options = {}) {
   let insertedVip = 0;
   let publishedFree = 0;
   let publishedVip = 0;
+  let freeInsertedToday = freeDayTotal;
+  let vipInsertedToday = vipDayTotal;
+
+  /** Mismo mercado (p.ej. hándicap -0.25) no se inserta dos veces ni en free ni en vip. */
+  const usedMarketKeys = new Set([...existingFreeKeys, ...existingVipKeys]);
+
   for (const pick of freePicks) {
+    if (freeInsertedToday >= dailyCapFree) break;
     const key = buildMatchKey(pick);
     const fk = fixtureTierDedupeKey(pick);
-    if (existingFixtureFree.has(fk) || existingFreeKeys.has(key)) {
+    if (usedMarketKeys.has(key) || existingFreeKeys.has(key)) continue;
+    const existingForFixture = picksByFixtureFree.get(fk) || [];
+    if (!shouldAcceptPickForFixture({ existingPicks: existingForFixture, candidate: pick, tier: "free" })) {
       continue;
     }
-    await createFreePrediction(pick);
+    const created = await createFreePrediction(pick);
+    if (created?._already) {
+      usedMarketKeys.add(key);
+      existingFreeKeys.add(key);
+      if (!picksByFixtureFree.has(fk)) picksByFixtureFree.set(fk, []);
+      picksByFixtureFree.get(fk).push(created);
+      continue;
+    }
     insertedFree += 1;
+    freeInsertedToday += 1;
     existingFreeKeys.add(key);
-    existingFixtureFree.add(fk);
+    usedMarketKeys.add(key);
+    if (!picksByFixtureFree.has(fk)) picksByFixtureFree.set(fk, []);
+    picksByFixtureFree.get(fk).push(pick);
     try {
       const pub = await publishPickToProduction(pick, "free");
       if (pub.published) publishedFree += 1;
@@ -211,15 +277,28 @@ async function runPredictionPipeline(options = {}) {
     }
   }
   for (const pick of vipPicks) {
+    if (vipInsertedToday >= dailyCapVip) break;
     const key = buildMatchKey(pick);
     const fk = fixtureTierDedupeKey(pick);
-    if (existingFixtureVip.has(fk) || existingVipKeys.has(key)) {
+    if (usedMarketKeys.has(key) || existingVipKeys.has(key)) continue;
+    const existingForFixture = picksByFixtureVip.get(fk) || [];
+    if (!shouldAcceptPickForFixture({ existingPicks: existingForFixture, candidate: pick, tier: "vip" })) {
       continue;
     }
-    await createVipPrediction(pick);
+    const created = await createVipPrediction(pick);
+    if (created?._already) {
+      usedMarketKeys.add(key);
+      existingVipKeys.add(key);
+      if (!picksByFixtureVip.has(fk)) picksByFixtureVip.set(fk, []);
+      picksByFixtureVip.get(fk).push(created);
+      continue;
+    }
     insertedVip += 1;
+    vipInsertedToday += 1;
     existingVipKeys.add(key);
-    existingFixtureVip.add(fk);
+    usedMarketKeys.add(key);
+    if (!picksByFixtureVip.has(fk)) picksByFixtureVip.set(fk, []);
+    picksByFixtureVip.get(fk).push(pick);
     try {
       const pub = await publishPickToProduction(pick, "vip");
       if (pub.published) publishedVip += 1;
@@ -233,7 +312,7 @@ async function runPredictionPipeline(options = {}) {
     `uncovered_free=${uncoveredForFree.length} uncovered_vip=${uncoveredForVip.length} ai_target=${aiInputFixtures.length} ` +
     `scraped=${scraped.length} insertados free=+${insertedFree} vip=+${insertedVip} ` +
     `planta free=+${publishedFree} vip=+${publishedVip} ` +
-    `total_dia free=${existingFree.length + insertedFree} vip=${existingVip.length + insertedVip}`
+    `cap free=${freeInsertedToday}/${dailyCapFree} vip=${vipInsertedToday}/${dailyCapVip} maxPerMatch=${maxPerMatch}`
   );
   return {
     free: insertedFree,

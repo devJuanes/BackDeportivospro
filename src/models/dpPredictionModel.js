@@ -5,6 +5,8 @@ const { buildPredictionSeo } = require("../utils/predictionSeo");
 const { inferTier } = require("../utils/predictionDto");
 const { sortByKickoffAsc, todayMatchDate } = require("../utils/matchSchedule");
 const { scrubPlayStoreText } = require("../utils/playStoreSafe");
+const { marketDedupeKey, fixtureTierDedupeKey, pickHomeTeam, pickAwayTeam } = require("../utils/predictionDedupe");
+const { shouldAcceptPickForFixture, collapsePicksForDisplay } = require("../utils/pickVolume");
 
 const TABLE = process.env.DP_PREDICTIONS_TABLE || "dp_predictions";
 
@@ -28,7 +30,14 @@ async function getPredictions(limit = 100, filters = {}) {
     query = query.eq("status", filters.status);
   }
 
-  const { data, error } = await query.limit(Math.min(limit * 3, 600));
+  const fetchCap = filters.collapse === false ? Math.min(limit * 3, 600) : Math.min(limit * 6, 800);
+  // Orden en DB: evita slices aleatorios cuando all=true / sin todayOnly.
+  try {
+    query = query.order("match_date", { ascending: false }).order("match_hour", { ascending: true });
+  } catch {
+    /* algunos clientes MatuDB solo aceptan un order */
+  }
+  const { data, error } = await query.limit(fetchCap);
 
   if (error) {
     throw new Error(error.message || "Error obteniendo pronósticos");
@@ -37,6 +46,9 @@ async function getPredictions(limit = 100, filters = {}) {
   let rows = data || [];
   if (filters.todayOnly) {
     rows = rows.filter((row) => normalizeMatchDate(row.match_date) === targetDate);
+  }
+  if (filters.collapse !== false) {
+    rows = collapsePicksForDisplay(rows);
   }
   return sortByKickoffAsc(rows).slice(0, limit);
 }
@@ -48,12 +60,20 @@ async function getPredictionById(id) {
   return row || null;
 }
 
+async function loadDayPredictions(matchDate, sport = null) {
+  let query = db.from(TABLE).select("*").eq("match_date", matchDate).limit(600);
+  if (sport) query = query.eq("sport", String(sport).trim().toLowerCase());
+  const { data, error } = await query;
+  if (error) return [];
+  return (data || []).filter((row) => normalizeMatchDate(row.match_date) === matchDate);
+}
+
 async function createPrediction(payload, baseTier = "free") {
   const tier = inferTier(payload, baseTier);
   const matchHour = normalizeMatchHour(payload.hours || payload.match_hour);
   const sport = String(payload.sport || "football").trim().toLowerCase() || "football";
-  const home = payload.homeTeam?.name || payload.home_team_name || payload.team_a || "";
-  const away = payload.awayTeam?.name || payload.away_team_name || payload.team_b || "";
+  const home = pickHomeTeam(payload);
+  const away = pickAwayTeam(payload);
   const prediction = scrubPlayStoreText(
     String(payload.prediction || payload.pick_text || "").trim()
   );
@@ -80,6 +100,18 @@ async function createPrediction(payload, baseTier = "free") {
     seo_title: scrubPlayStoreText(seo.seo_title) || null,
     seo_description: scrubPlayStoreText(seo.seo_description) || null,
   };
+
+  const existingDay = await loadDayPredictions(row.match_date, sport);
+  const newKey = marketDedupeKey(row);
+  const duplicate = existingDay.find((r) => marketDedupeKey(r) === newKey);
+  if (duplicate) {
+    return { ...duplicate, _already: true };
+  }
+  const fixtureKey = fixtureTierDedupeKey(row);
+  const sameFixture = existingDay.filter((r) => fixtureTierDedupeKey(r) === fixtureKey);
+  if (!shouldAcceptPickForFixture({ existingPicks: sameFixture, candidate: row, tier: baseTier })) {
+    return { ...(sameFixture[0] || row), _already: true, _reason: "fixture_covered" };
+  }
 
   const { data, error } = await db.from(TABLE).insert(row);
   if (error) throw new Error(error.message || "Error creando pronóstico");
@@ -123,13 +155,24 @@ async function getSummaryToday(tier) {
   return summary;
 }
 
+function isUniqueViolation(error) {
+  const code = String(error?.code || error?.status || "");
+  const msg = String(error?.message || error || "").toLowerCase();
+  return (
+    code === "23505" ||
+    msg.includes("duplicate") ||
+    msg.includes("unique") ||
+    msg.includes("already exists")
+  );
+}
+
 async function followPrediction(predictionId, clientId) {
   const { data, error } = await db.from("dp_prediction_follows").insert({
     prediction_id: predictionId,
     client_id: clientId,
   });
   if (error) {
-    if (String(error.message).toLowerCase().includes("duplicate")) {
+    if (isUniqueViolation(error)) {
       return { already: true };
     }
     throw new Error(error.message || "Error siguiendo pronóstico");
@@ -149,6 +192,21 @@ async function followPrediction(predictionId, clientId) {
 }
 
 async function unfollowPrediction(predictionId, clientId) {
+  const existing = await db
+    .from("dp_prediction_follows")
+    .select("id")
+    .eq("prediction_id", predictionId)
+    .eq("client_id", clientId)
+    .limit(1);
+
+  if (existing.error) {
+    throw new Error(existing.error.message || "Error dejando de seguir");
+  }
+  const rows = existing.data || [];
+  if (!rows.length) {
+    return { unfollowed: false, already: true };
+  }
+
   const { error } = await db
     .from("dp_prediction_follows")
     .eq("prediction_id", predictionId)
@@ -202,7 +260,7 @@ async function ensureTrackingJob(predictionId) {
     prediction_id: predictionId,
     status: "active",
     next_check_at: next.toISOString(),
-    check_interval_sec: 120,
+    check_interval_sec: 45,
   });
   if (error) throw new Error(error.message || "Error creando tracking job");
   return Array.isArray(data) ? data[0] : data;
@@ -234,7 +292,7 @@ async function ensureLiveTrackingJob(abetliveId, predictionId = null) {
     abetlive_id: abetliveId,
     status: "active",
     next_check_at: next.toISOString(),
-    check_interval_sec: 90,
+    check_interval_sec: 30,
   };
   if (predictionId) payload.prediction_id = predictionId;
 

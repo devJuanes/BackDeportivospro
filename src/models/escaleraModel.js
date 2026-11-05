@@ -171,6 +171,15 @@ async function upsertUserToken(userId, token, deviceInfo = {}) {
       { user_id: userId, token, app_id: "matupicks", device_info: deviceInfo, last_used_at: new Date().toISOString() },
       { onConflict: "user_id,app_id,token" }
     );
+  // Mirror en pf_users.fcm_token (último token activo del dispositivo).
+  try {
+    await db.from("pf_users").eq("id", userId).update({
+      fcm_token: token,
+      updated_at: new Date().toISOString(),
+    });
+  } catch {
+    /* columna opcional */
+  }
   if (!primary.error) {
     const { data: row } = await db
       .from(TABLES.tokens)

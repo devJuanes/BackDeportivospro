@@ -6,6 +6,8 @@ const LIGAS_DIR = path.join(DATA_ROOT, "ligas");
 const LOGOS_DIR = path.join(DATA_ROOT, "logos");
 /** Public mount for `data/futbool/logos` (see app.js). */
 const LOGOS_PUBLIC_PREFIX = "/assets/leagues";
+/** URL pública para logos en MatuDB (apps deben poder abrirla). */
+const DEFAULT_PUBLIC_API = "https://api.picks.matupicks.app";
 
 const NOISE_TOKENS = new Set([
   "fc",
@@ -36,15 +38,29 @@ const NOISE_TOKENS = new Set([
 
 let cache = null;
 
+function isLocalhostUrl(url = "") {
+  return /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?/i.test(String(url).trim());
+}
+
+/**
+ * Base URL absoluta para logos guardados en BD.
+ * Nunca usa localhost salvo FORCE_LOCAL_LOGO_URLS=true.
+ */
 function getPublicBaseUrl() {
+  const forceLocal = String(process.env.FORCE_LOCAL_LOGO_URLS || "").toLowerCase() === "true";
   const fromEnv = String(
-    process.env.PUBLIC_BASE_URL || process.env.API_PUBLIC_URL || ""
+    process.env.LOGO_PUBLIC_BASE_URL ||
+      process.env.PUBLIC_BASE_URL ||
+      process.env.API_PUBLIC_URL ||
+      ""
   )
     .trim()
     .replace(/\/+$/, "");
-  if (fromEnv) return fromEnv;
-  const port = Number.parseInt(process.env.PORT, 10) || 3009;
-  return `http://localhost:${port}`;
+
+  if (fromEnv && (!isLocalhostUrl(fromEnv) || forceLocal)) {
+    return fromEnv;
+  }
+  return DEFAULT_PUBLIC_API;
 }
 
 function normalizeName(value = "") {
@@ -71,6 +87,17 @@ function publicUrlForRelPath(relFromLogos = "") {
     .replace(/\\/g, "/");
   if (!cleaned) return "";
   return `${getPublicBaseUrl()}${LOGOS_PUBLIC_PREFIX}/${cleaned}`;
+}
+
+/** Si ya viene una URL con localhost, la pasa a la base pública. */
+function ensurePublicLogoUrl(url = "") {
+  const s = String(url || "").trim();
+  if (!s) return "";
+  if (!isLocalhostUrl(s)) return s;
+  const base = getPublicBaseUrl();
+  return s
+    .replace(/^https?:\/\/localhost(?::\d+)?/i, base)
+    .replace(/^https?:\/\/127\.0\.0\.1(?::\d+)?/i, base);
 }
 
 function loadCache() {
@@ -128,9 +155,13 @@ function loadCache() {
       const logoRel = String(eq.logo || "")
         .replace(/^logos\//i, "")
         .replace(/\\/g, "/");
-      if (!logoRel) continue;
-      const abs = path.join(LOGOS_DIR, logoRel);
-      if (!fs.existsSync(abs)) continue;
+      const logoRemoto = String(eq.logoRemoto || eq.logo_remoto || "").trim();
+      if (!logoRel && !logoRemoto) continue;
+      if (logoRel) {
+        const abs = path.join(LOGOS_DIR, logoRel);
+        // Si no hay PNG local pero sí URL remota, igual indexamos el equipo.
+        if (!fs.existsSync(abs) && !/^https?:\/\//i.test(logoRemoto)) continue;
+      }
 
       const names = [
         eq.nombre,
@@ -151,6 +182,7 @@ function loadCache() {
         leagueSlug,
         leagueName,
         logoRel,
+        logoRemoto,
         names: [...new Set(names)],
         tokens: significantTokens(normalizeName(eq.nombre || eq.slug || "")),
       };
@@ -204,7 +236,32 @@ function scoreTeamMatch(entry, queryNorm, queryTokens, leagueHintNorm) {
 }
 
 /**
+ * URL a persistir en MatuDB:
+ * 1) Logo local servido por la API pública (api.picks.matupicks.app/assets/leagues/...)
+ * 2) Fallback logoRemoto solo si no hay PNG en disco
+ * Nunca localhost.
+ */
+function absoluteLogoForEntry(entry) {
+  const rel = String(entry?.logoRel || "").trim();
+  if (rel) {
+    const abs = path.join(LOGOS_DIR, rel);
+    if (fs.existsSync(abs)) {
+      return publicUrlForRelPath(rel);
+    }
+  }
+  const remote = String(entry?.logoRemoto || "").trim();
+  if (/^https?:\/\//i.test(remote) && !isLocalhostUrl(remote)) {
+    return remote;
+  }
+  // Sin archivo local: igual devolvemos la URL pública esperada (el PNG puede
+  // existir en el server aunque falte en este entorno).
+  if (rel) return publicUrlForRelPath(rel);
+  return "";
+}
+
+/**
  * Resolve a team logo public URL from local futbool assets.
+ * Guarda siempre la URL pública del API cuando hay logo local.
  * @param {string} teamName
  * @param {string} [leagueHint]
  * @returns {string} absolute URL or ""
@@ -221,12 +278,12 @@ function resolveTeamLogoUrl(teamName, leagueHint = "") {
 
   const exactHits = byExact.get(queryNorm) || [];
   if (exactHits.length === 1) {
-    return publicUrlForRelPath(exactHits[0].logoRel);
+    return absoluteLogoForEntry(exactHits[0]);
   }
   if (exactHits.length > 1) {
     const preferred =
       exactHits.find((e) => leagueHintMatches(e, leagueHintNorm)) || exactHits[0];
-    return publicUrlForRelPath(preferred.logoRel);
+    return absoluteLogoForEntry(preferred);
   }
 
   let best = null;
@@ -241,7 +298,7 @@ function resolveTeamLogoUrl(teamName, leagueHint = "") {
 
   // Require a reasonably confident fuzzy hit.
   if (!best || bestScore < 45) return "";
-  return publicUrlForRelPath(best.logoRel);
+  return absoluteLogoForEntry(best);
 }
 
 /**
@@ -305,20 +362,28 @@ function enrichPickLogos(pick) {
 
   if (pick.homeTeam && typeof pick.homeTeam === "object") {
     if (!pick.homeTeam.logo && resolvedHome) pick.homeTeam.logo = resolvedHome;
+    else if (pick.homeTeam.logo) pick.homeTeam.logo = ensurePublicLogoUrl(pick.homeTeam.logo);
   }
   if (!pick.home_team_logo) {
     pick.home_team_logo = pick.homeTeam?.logo || resolvedHome || "";
+  } else {
+    pick.home_team_logo = ensurePublicLogoUrl(pick.home_team_logo);
   }
 
   if (pick.awayTeam && typeof pick.awayTeam === "object") {
     if (!pick.awayTeam.logo && resolvedAway) pick.awayTeam.logo = resolvedAway;
+    else if (pick.awayTeam.logo) pick.awayTeam.logo = ensurePublicLogoUrl(pick.awayTeam.logo);
   }
   if (!pick.away_team_logo) {
     pick.away_team_logo = pick.awayTeam?.logo || resolvedAway || "";
+  } else {
+    pick.away_team_logo = ensurePublicLogoUrl(pick.away_team_logo);
   }
 
   if (!pick.league_logo && resolvedLeague) {
     pick.league_logo = resolvedLeague;
+  } else if (pick.league_logo) {
+    pick.league_logo = ensurePublicLogoUrl(pick.league_logo);
   }
 
   return pick;
@@ -344,7 +409,9 @@ module.exports = {
   DATA_ROOT,
   LOGOS_DIR,
   LOGOS_PUBLIC_PREFIX,
+  DEFAULT_PUBLIC_API,
   getPublicBaseUrl,
+  ensurePublicLogoUrl,
   normalizeName,
   publicUrlForRelPath,
   resolveTeamLogoUrl,

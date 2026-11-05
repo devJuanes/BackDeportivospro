@@ -60,10 +60,22 @@ function buildWebCheckoutUrl({
 const PFVIP_UUID_SEG =
   "([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})";
 
-/** Referencias: pfvip-{uuid}-wk-|mo-|yr-{ts}-… */
+/**
+ * Referencias:
+ * - pfvip-{uuid}-wk|mo|yr-{ts}-…
+ * - pfvip-{uuid}-mn{minutes}-{ts}-…  (recarga parcial)
+ */
 function parsePfVipMetaFromReference(reference) {
   if (!reference || typeof reference !== "string") return null;
   const trimmed = reference.trim();
+  const minutesTag = new RegExp(`^pfvip-${PFVIP_UUID_SEG}-mn(\\d+)-`, "i").exec(trimmed);
+  if (minutesTag) {
+    return {
+      userId: minutesTag[1],
+      planTag: "mn",
+      minutes: Number.parseInt(minutesTag[2], 10),
+    };
+  }
   const tagged = new RegExp(`^pfvip-${PFVIP_UUID_SEG}-(wk|mo|yr)-`, "i").exec(trimmed);
   if (tagged) return { userId: tagged[1], planTag: tagged[2].toLowerCase() };
   const legacy = new RegExp(`^pfvip-${PFVIP_UUID_SEG}-`, "i").exec(trimmed);

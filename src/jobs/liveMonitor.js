@@ -7,11 +7,17 @@ const { generateLiveSuggestion } = require("../services/predictionEngine");
 const { generateLiveInsightFromMatch } = require("../services/aiForecastService");
 const { getLiveMatchesBySport, getFactorySports } = require("../services/sportsService");
 const { runLiveLifecycleOnce } = require("../services/liveSettlementService");
+const { settlePendingPickResultsOnce } = require("../services/pickSettlementService");
 const { ensureLiveTrackingJob } = require("../models/dpPredictionModel");
 const { liveSignalDedupeKey } = require("../utils/predictionDedupe");
 const { enrichPickLogos } = require("../services/futboolLogoService");
 const { notifyLiveTip } = require("../services/telegramService");
 const { notifyLivePick } = require("../services/predictionNotifyService");
+const { upsertFixtures } = require("../models/fixtureModel");
+const { getDailyCap } = require("../utils/pickVolume");
+const { isCornersOrCardsMarket } = require("../utils/pickResultEvaluator");
+const { formatDateInTimezone } = require("../utils/helpers");
+const { db } = require("../config/database");
 const logger = require("../utils/logger");
 
 function delay(ms) {
@@ -20,7 +26,7 @@ function delay(ms) {
 
 const recentAlerts = new Map();
 
-const LIVE_ALERT_COOLDOWN_MS = Number.parseInt(process.env.LIVE_ALERT_COOLDOWN_MS || `${8 * 60 * 1000}`, 10);
+const LIVE_ALERT_COOLDOWN_MS = Number.parseInt(process.env.LIVE_ALERT_COOLDOWN_MS || `${3 * 60 * 1000}`, 10);
 
 function shouldCreateAlert(alert) {
   const key = liveSignalDedupeKey(
@@ -32,11 +38,37 @@ function shouldCreateAlert(alert) {
   const now = Date.now();
   const lastTs = recentAlerts.get(key) || 0;
   const diffMs = now - lastTs;
-  if (diffMs < Math.max(120000, LIVE_ALERT_COOLDOWN_MS)) {
+  if (diffMs < Math.max(60000, LIVE_ALERT_COOLDOWN_MS)) {
     return false;
   }
   recentAlerts.set(key, now);
   return true;
+}
+
+async function cacheLiveScoreboard(matches = []) {
+  const rows = (matches || [])
+    .filter((m) => m && (m.eventId || m.source_event_id))
+    .map((m) => ({
+      source: m.source || "espn_live",
+      eventId: m.eventId || m.source_event_id,
+      sport: m.sport || "football",
+      league: m.league || "Live",
+      match_date: m.match_date,
+      match_hour: m.match_hour || "00:00",
+      homeTeam: m.homeTeam,
+      awayTeam: m.awayTeam,
+      status: m.status === "in" || m.status === "live" ? "in" : m.status || "in",
+      minute: m.minute || 0,
+      homeGoals: m.homeGoals || 0,
+      awayGoals: m.awayGoals || 0,
+    }));
+  if (!rows.length) return 0;
+  try {
+    return await upsertFixtures(rows);
+  } catch (error) {
+    logger.warn(`[live] cache scoreboard: ${error.message}`);
+    return 0;
+  }
 }
 
 async function monitorLiveMatches() {
@@ -48,12 +80,12 @@ async function monitorLiveMatches() {
       const rows = await getLiveMatchesBySport(sport);
       allLiveMatches.push(...rows);
     } catch (error) {
-      // DNS / red: degradar sin tumbar el ciclo (sigue cleanup + settle por caché).
       logger.warn(`No se pudieron leer vivos para ${sport}: ${error.message}`);
     }
   }
 
-  // Ciclo de vida: solo día actual (America/Bogota), settle al finalizar, limpia stale.
+  await cacheLiveScoreboard(allLiveMatches);
+
   let lifecycle = { settled: 0, refreshed: 0, calendarClosed: 0 };
   try {
     lifecycle = await runLiveLifecycleOnce(allLiveMatches);
@@ -61,10 +93,14 @@ async function monitorLiveMatches() {
     logger.warn(`Live lifecycle omitido: ${error.message}`);
   }
 
-  const activePairKeys = new Set(
-    allLiveMatches.map((m) => `${m.homeTeam}|${m.awayTeam}`)
-  );
-  // Solo reconciliar por ausencia en scoreboard si hay al menos un vivo (evita DNS vacío → matar todos).
+  // Misma pasada: planta free/vip + repair marcador (cada minuto con el live).
+  try {
+    await settlePendingPickResultsOnce();
+  } catch (error) {
+    logger.warn(`Settlement en live omitido: ${error.message}`);
+  }
+
+  const activePairKeys = new Set(allLiveMatches.map((m) => `${m.homeTeam}|${m.awayTeam}`));
   if (activePairKeys.size > 0) {
     const sinceReconcileIso = new Date(Date.now() - 14 * 3600 * 1000).toISOString();
     try {
@@ -75,42 +111,63 @@ async function monitorLiveMatches() {
   }
 
   const aiLiveLimit = Number.parseInt(process.env.FACTORY_AI_LIVE_MATCH_LIMIT || "5", 10);
-  const gapMs = Number.parseInt(process.env.FACTORY_AI_DELAY_MS || "2500", 10);
+  const gapMs = Number.parseInt(process.env.FACTORY_AI_DELAY_MS || "1200", 10);
+  const liveCap = getDailyCap("live");
+  const today = formatDateInTimezone(new Date(), process.env.FACTORY_TIMEZONE || "America/Bogota");
+  let liveTodayCount = 0;
+  try {
+    const { data: liveRows } = await db
+      .from("abetlive")
+      .select("id")
+      .eq("match_date", today)
+      .limit(liveCap + 20);
+    liveTodayCount = (liveRows || []).length;
+  } catch {
+    liveTodayCount = 0;
+  }
+
   let aiLiveCalls = 0;
   let created = 0;
+  const maxCreateThisCycle = Number.parseInt(process.env.FACTORY_LIVE_CREATE_PER_CYCLE || "4", 10);
 
   for (const match of allLiveMatches) {
+    if (liveTodayCount + created >= liveCap) break;
+    if (created >= Math.max(1, maxCreateThisCycle)) break;
+
     const heuristic = generateLiveSuggestion(match);
-    if (!heuristic) {
-      continue;
-    }
+    if (!heuristic) continue;
+    if (isCornersOrCardsMarket(heuristic.prediction || "")) continue;
 
     let suggestion = {
       ...heuristic,
       home_goals: match.homeGoals,
       away_goals: match.awayGoals,
-      match_date: match.match_date,
+      match_date: match.match_date || today,
     };
     if (aiLiveCalls < aiLiveLimit) {
       const refined = await generateLiveInsightFromMatch(match, heuristic);
       aiLiveCalls += 1;
       if (refined && refined.pick && !refined.invalid_context) {
-        suggestion = {
-          ...suggestion,
-          prediction: refined.pick,
-          confidence: refined.confidence,
-          odds: refined.odds ?? heuristic.odds,
-          ai_rationale: refined.analysis,
-        };
+        if (isCornersOrCardsMarket(refined.pick)) {
+          /* descartar corners/cards de IA */
+        } else {
+          suggestion = {
+            ...suggestion,
+            prediction: refined.pick,
+            confidence: refined.confidence,
+            odds: refined.odds ?? heuristic.odds,
+            ai_rationale: refined.analysis,
+          };
+        }
       }
       if (gapMs > 0 && aiLiveCalls < aiLiveLimit) {
         await delay(gapMs);
       }
     }
 
-    if (!shouldCreateAlert(suggestion)) {
-      continue;
-    }
+    if (isCornersOrCardsMarket(suggestion.prediction || "")) continue;
+    if ((Number(suggestion.confidence) || 0) < 63) continue;
+    if (!shouldCreateAlert(suggestion)) continue;
     const sinceIso = new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString();
     const duplicate = await existsRecentLivePrediction(suggestion, sinceIso);
     if (!duplicate) {
@@ -125,7 +182,7 @@ async function monitorLiveMatches() {
         await notifyLiveTip(row || suggestion);
         await notifyLivePick(row || suggestion);
       } catch {
-        /* alertas opcionales */
+        /* opcional */
       }
       const liveId = row?.id;
       if (liveId) {
