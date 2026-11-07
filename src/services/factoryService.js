@@ -16,7 +16,12 @@ const {
   publishQueueDayToProduction,
   isAutoPublishEnabled,
 } = require("./productionPublishService");
-const { isAiEnabled, isAgentModeEnabled, getAiProviderConfig } = require("./aiForecastService");
+const {
+  isAiEnabled,
+  isAgentModeEnabled,
+  getAiProviderConfig,
+  getAiStatus,
+} = require("./aiForecastService");
 const { tryAcquireFactoryLock, releaseFactoryLock, instanceId } = require("./factoryLockService");
 
 const factoryState = {
@@ -179,12 +184,16 @@ async function getFactoryStatus() {
     getPredictionSourcePolicy("football"),
   ]);
 
+  const ai = getAiStatus();
   return {
     ...factoryState,
     auto_settle_enabled: factoryState.autoSettleEnabled,
     auto_publish: isAutoPublishEnabled(),
     ai_enabled: isAiEnabled(),
     ai_agent_mode: isAgentModeEnabled(),
+    ai_provider: ai.provider,
+    ai_model: ai.model,
+    ai_status: ai,
     timezone: process.env.FACTORY_TIMEZONE || "America/Bogota",
     sports: getFactorySports(),
     free_today: free,

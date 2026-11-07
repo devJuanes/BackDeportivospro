@@ -23,30 +23,108 @@ function isAiEnabled() {
 }
 
 function getAiProviderConfig() {
-  const provider = String(process.env.FACTORY_AI_PROVIDER || "").trim().toLowerCase();
+  const provider = String(process.env.FACTORY_AI_PROVIDER || "")
+    .trim()
+    .toLowerCase();
   const minimaxKey = String(process.env.MINIMAX_API_KEY || "").trim();
+  const openaiKey = String(
+    process.env.OPENAI_API_KEY || process.env.FACTORY_AI_API_KEY || "",
+  ).trim();
   const factoryKey = String(process.env.FACTORY_AI_API_KEY || "").trim();
-  const useMinimax =
-    provider === "minimax" ||
-    (Boolean(minimaxKey) && provider !== "deepseek");
+  const deepseekKey = String(process.env.DEEPSEEK_API_KEY || factoryKey).trim();
 
-  if (useMinimax) {
+  // OpenAI (económico: gpt-4o-mini por defecto). MiniMax se conserva en env.
+  if (provider === "openai" || provider === "chatgpt") {
     return {
-      provider: "minimax",
-      url: (process.env.FACTORY_AI_BASE_URL || "https://api.minimax.io/v1").replace(/\/$/, ""),
-      apiKey: minimaxKey || factoryKey,
+      provider: "openai",
+      url: (
+        process.env.OPENAI_BASE_URL ||
+        process.env.FACTORY_AI_BASE_URL ||
+        "https://api.openai.com/v1"
+      ).replace(/\/$/, ""),
+      apiKey: openaiKey || factoryKey,
       model:
-        process.env.MINIMAX_MODEL ||
+        process.env.OPENAI_MODEL ||
         process.env.FACTORY_AI_MODEL ||
-        "MiniMax-M2.5",
+        "gpt-4o-mini",
+    };
+  }
+
+  if (provider === "deepseek") {
+    return {
+      provider: "deepseek",
+      url: (process.env.FACTORY_AI_BASE_URL || "https://api.deepseek.com").replace(
+        /\/$/,
+        "",
+      ),
+      apiKey: deepseekKey,
+      model: process.env.FACTORY_AI_MODEL || "deepseek-chat",
+    };
+  }
+
+  // Default / explícito: MiniMax (si hay key). Si no, cae a OpenAI si existe.
+  if (provider === "minimax" || (!provider && minimaxKey)) {
+    if (minimaxKey || factoryKey) {
+      return {
+        provider: "minimax",
+        url: (
+          process.env.MINIMAX_BASE_URL ||
+          process.env.FACTORY_AI_BASE_URL ||
+          "https://api.minimax.io/v1"
+        ).replace(/\/$/, ""),
+        apiKey: minimaxKey || factoryKey,
+        model:
+          process.env.MINIMAX_MODEL ||
+          process.env.FACTORY_AI_MODEL ||
+          "MiniMax-M2.5",
+      };
+    }
+  }
+
+  if (openaiKey) {
+    return {
+      provider: "openai",
+      url: (process.env.OPENAI_BASE_URL || "https://api.openai.com/v1").replace(
+        /\/$/,
+        "",
+      ),
+      apiKey: openaiKey,
+      model:
+        process.env.OPENAI_MODEL ||
+        process.env.FACTORY_AI_MODEL ||
+        "gpt-4o-mini",
     };
   }
 
   return {
-    provider: "openai-compatible",
-    url: (process.env.FACTORY_AI_BASE_URL || "https://api.deepseek.com").replace(/\/$/, ""),
+    provider: provider || "none",
+    url: (process.env.FACTORY_AI_BASE_URL || "").replace(/\/$/, ""),
     apiKey: factoryKey,
-    model: process.env.FACTORY_AI_MODEL || "deepseek-chat",
+    model: process.env.FACTORY_AI_MODEL || "",
+  };
+}
+
+/** Estado legible del proveedor AI activo (sin exponer la API key). */
+function getAiStatus() {
+  const enabled = isAiEnabled();
+  const cfg = getAiProviderConfig();
+  const available = {
+    minimax: Boolean(String(process.env.MINIMAX_API_KEY || "").trim()),
+    openai: Boolean(
+      String(process.env.OPENAI_API_KEY || process.env.FACTORY_AI_API_KEY || "").trim(),
+    ),
+    deepseek: Boolean(
+      String(process.env.DEEPSEEK_API_KEY || process.env.FACTORY_AI_API_KEY || "").trim(),
+    ),
+  };
+  return {
+    enabled,
+    provider: enabled ? cfg.provider : null,
+    model: enabled ? cfg.model : null,
+    baseUrl: enabled ? cfg.url : null,
+    available,
+    switchHint:
+      "FACTORY_AI_PROVIDER=openai|minimax|deepseek (+ OPENAI_API_KEY / MINIMAX_API_KEY)",
   };
 }
 
@@ -194,7 +272,9 @@ async function callChatModel(prompt, systemOverride, opts = {}) {
   const apiKey = cfg.apiKey;
   const model = cfg.model;
   if (!apiKey) {
-    throw new Error("Configura MINIMAX_API_KEY o FACTORY_AI_API_KEY");
+    throw new Error(
+      "Configura OPENAI_API_KEY, MINIMAX_API_KEY o FACTORY_AI_API_KEY",
+    );
   }
   const system =
     typeof systemOverride === "string" && systemOverride.trim()
@@ -376,5 +456,6 @@ module.exports = {
   isAiEnabled,
   isAiLiveEnabled,
   getAiProviderConfig,
+  getAiStatus,
   isAgentModeEnabled,
 };

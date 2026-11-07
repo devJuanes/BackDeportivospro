@@ -82,7 +82,7 @@ function publicPricing(copPerUsd = FALLBACK_COP_PER_USD) {
     minTopupUsd: minTopupUsd(),
     minutesPerUsd: minutesPerUsd(),
     copPerUsd: rate,
-    topupPresetsUsd: [1, 1.25, 1.5, 1.75, 2],
+    topupPresetsUsd: [1, 2, 5, 10, 20],
     plans: {
       weekly: {
         id: "weekly",

@@ -17,12 +17,16 @@ const vipRequestRoutes = require("./routes/vipRequestRoutes");
 const apiV1Routes = require("./routes/apiV1Routes");
 const communityRoutes = require("./routes/communityRoutes");
 const { getSupportedSports } = require("./services/sportsService");
+const { getStats: getTeamsStats } = require("./services/teamsService");
 const logger = require("./utils/logger");
 
 const app = express();
 
-/** Orígenes del front MatuPicks siempre permitidos (además de `CORS_ORIGIN` en .env). */
+/** Orígenes del front siempre permitidos (además de `CORS_ORIGIN` en .env). */
 const DEFAULT_MATUPICKS_ORIGINS = [
+  "https://winquina.com",
+  "https://www.winquina.com",
+  "https://towin-fe4cc.web.app",
   "https://matupicks.app",
   "https://www.matupicks.app",
   "https://picks.logsfm.com",
@@ -106,6 +110,21 @@ app.get("/health", (req, res) => {
 });
 
 app.use("/api/v1", apiV1Routes);
+
+/**
+ * Precalienta el indice de equipos/ligas (data/futbool) para que el primer
+ * request a /api/v1/teams|leagues no pague el build (~100 ms).
+ */
+setImmediate(() => {
+  try {
+    const stats = getTeamsStats();
+    logger.info(
+      `[teams] indice listo: ${stats.leagues} ligas, ${stats.teams} equipos, ${stats.logos} logos (${stats.buildMs}ms)`,
+    );
+  } catch (error) {
+    logger.warn(`[teams] no se pudo precalentar el indice: ${error.message}`);
+  }
+});
 /** Team/league logos copied from futbool → `data/futbool/logos/<league>/<team>.png` */
 app.use(
   "/assets/leagues",

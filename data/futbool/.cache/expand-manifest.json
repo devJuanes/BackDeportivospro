@@ -1,0 +1,398 @@
+{
+  "efl-league-one": {
+    "equipos": 24,
+    "conLogo": 7,
+    "wiki": "2025–26 EFL League One",
+    "cuando": "2026-11-06T08:23:53.150Z"
+  },
+  "efl-league-two": {
+    "equipos": 24,
+    "conLogo": 9,
+    "wiki": "2025–26 EFL League Two",
+    "cuando": "2026-11-06T08:24:27.837Z"
+  },
+  "scottish-championship": {
+    "equipos": 10,
+    "conLogo": 7,
+    "wiki": "2025–26 Scottish Championship",
+    "cuando": "2026-11-06T08:24:46.461Z"
+  },
+  "scottish-league-one": {
+    "equipos": 10,
+    "conLogo": 7,
+    "wiki": "2025–26 Scottish League One",
+    "cuando": "2026-11-06T08:25:05.228Z"
+  },
+  "scottish-league-two": {
+    "equipos": 10,
+    "conLogo": 9,
+    "wiki": "2025–26 Scottish League Two",
+    "cuando": "2026-11-06T08:25:24.842Z"
+  },
+  "fa-cup-escocia": {
+    "equipos": 34,
+    "conLogo": 0,
+    "wiki": "Scottish FA Cup",
+    "cuando": "2026-11-06T08:26:11.928Z"
+  },
+  "serie-c-italia": {
+    "equipos": 20,
+    "conLogo": 0,
+    "wiki": "2025–26 Serie C",
+    "cuando": "2026-11-06T08:26:51.421Z"
+  },
+  "coppa-italia": {
+    "equipos": 26,
+    "conLogo": 0,
+    "wiki": "Coppa Italia",
+    "cuando": "2026-11-06T08:27:38.782Z"
+  },
+  "ligue-1-francia": {
+    "equipos": 18,
+    "conLogo": 9,
+    "wiki": "2025–26 Ligue 1",
+    "cuando": "2026-11-06T08:28:11.869Z"
+  },
+  "ligue-2-francia": {
+    "equipos": 18,
+    "conLogo": 7,
+    "wiki": "2025–26 Ligue 2",
+    "cuando": "2026-11-06T08:11:47.069Z"
+  },
+  "coupe-de-france": {
+    "equipos": 54,
+    "conLogo": 0,
+    "wiki": "Coupe de France",
+    "cuando": "2026-11-06T08:12:12.734Z"
+  },
+  "taca-de-portugal": {
+    "equipos": 8,
+    "conLogo": 0,
+    "wiki": "2025–26 Taça de Portugal",
+    "cuando": "2026-11-06T08:12:15.343Z"
+  },
+  "i-liga-polonia": {
+    "equipos": 21,
+    "conLogo": 5,
+    "wiki": "2025–26 I liga",
+    "cuando": "2026-11-06T08:12:25.630Z"
+  },
+  "slovak-super-liga": {
+    "equipos": 13,
+    "conLogo": 5,
+    "wiki": "2025–26 Slovak First Football League",
+    "cuando": "2026-11-06T08:12:30.705Z"
+  },
+  "prva-liga-bulgaria": {
+    "equipos": 76,
+    "conLogo": 0,
+    "wiki": "Bulgarian First League",
+    "cuando": "2026-11-06T08:13:06.848Z"
+  },
+  "serbian-superliga": {
+    "equipos": 23,
+    "conLogo": 8,
+    "wiki": "2025–26 Serbian SuperLiga",
+    "cuando": "2026-11-06T08:13:18.160Z"
+  },
+  "cypriot-first-division": {
+    "equipos": 14,
+    "conLogo": 6,
+    "wiki": "2025–26 Cypriot First Division",
+    "cuando": "2026-11-06T08:13:25.919Z"
+  },
+  "cypriot-second-division": {
+    "equipos": 16,
+    "conLogo": 5,
+    "wiki": "2025–26 Cypriot Second Division",
+    "cuando": "2026-11-06T08:13:32.110Z"
+  },
+  "israeli-premier-league": {
+    "equipos": 15,
+    "conLogo": 5,
+    "wiki": "2025–26 Israeli Premier League",
+    "cuando": "2026-11-06T08:13:38.291Z"
+  },
+  "liga-leumit": {
+    "equipos": 16,
+    "conLogo": 6,
+    "wiki": "2025–26 Liga Leumit",
+    "cuando": "2026-11-06T08:13:44.535Z"
+  },
+  "premier-league-armenia": {
+    "equipos": 10,
+    "conLogo": 5,
+    "wiki": "2025–26 Armenian Premier League",
+    "cuando": "2026-11-06T08:13:50.876Z"
+  },
+  "premier-league-azerbaiyan": {
+    "equipos": 12,
+    "conLogo": 3,
+    "wiki": "2025–26 Azerbaijan Premier League",
+    "cuando": "2026-11-06T08:13:56.110Z"
+  },
+  "premier-league-kazajistan": {
+    "equipos": 24,
+    "conLogo": 5,
+    "wiki": "Kazakhstan Premier League",
+    "cuando": "2026-11-06T08:14:13.672Z"
+  },
+  "1-deild-faroe": {
+    "equipos": 56,
+    "conLogo": 0,
+    "wiki": "Faroe Islands Premier League",
+    "cuando": "2026-11-06T07:56:09.838Z"
+  },
+  "championship-irlanda-norte": {
+    "equipos": 12,
+    "conLogo": 1,
+    "wiki": "2025–26 NIFL Premiership",
+    "cuando": "2026-11-06T07:56:14.887Z"
+  },
+  "copa-del-rey": {
+    "equipos": 15,
+    "conLogo": 0,
+    "wiki": "Copa del Rey",
+    "cuando": "2026-11-06T08:14:28.464Z"
+  },
+  "uefa-europa-league": {
+    "equipos": 11,
+    "conLogo": 0,
+    "wiki": "2025–26 UEFA Europa League",
+    "cuando": "2026-11-06T08:14:30.490Z"
+  },
+  "copa-argentina": {
+    "equipos": 12,
+    "conLogo": 0,
+    "wiki": "Copa Argentina",
+    "cuando": "2026-11-06T08:14:40.163Z"
+  },
+  "copa-colombia": {
+    "equipos": 16,
+    "conLogo": 0,
+    "wiki": "Copa Colombia",
+    "cuando": "2026-11-06T08:14:50.707Z"
+  },
+  "primera-b-chile": {
+    "equipos": 16,
+    "conLogo": 8,
+    "wiki": "2025 Primera B de Chile",
+    "cuando": "2026-11-06T08:15:01.153Z"
+  },
+  "copa-chile": {
+    "equipos": 26,
+    "conLogo": 0,
+    "wiki": "Copa Chile",
+    "cuando": "2026-11-06T08:15:26.792Z"
+  },
+  "segunda-uruguay": {
+    "equipos": 27,
+    "conLogo": 4,
+    "wiki": "Uruguayan Segunda División",
+    "cuando": "2026-11-06T08:15:38.627Z"
+  },
+  "serie-b-ecuador": {
+    "equipos": 35,
+    "conLogo": 4,
+    "wiki": "Ecuadorian Serie B",
+    "cuando": "2026-11-06T08:15:54.975Z"
+  },
+  "segunda-peru": {
+    "equipos": 15,
+    "conLogo": 5,
+    "wiki": "2025 Liga 2 (Peru)",
+    "cuando": "2026-11-06T08:16:03.552Z"
+  },
+  "intermedia-paraguay": {
+    "equipos": 34,
+    "conLogo": 4,
+    "wiki": "Paraguayan División Intermedia",
+    "cuando": "2026-11-06T08:16:29.662Z"
+  },
+  "copa-paraguay": {
+    "equipos": 9,
+    "conLogo": 0,
+    "wiki": "Copa Paraguay",
+    "cuando": "2026-11-06T08:16:34.706Z"
+  },
+  "nacional-b-bolivia": {
+    "equipos": 22,
+    "conLogo": 0,
+    "wiki": "Copa Simón Bolívar (Bolivia)",
+    "cuando": "2026-11-06T07:58:17.124Z"
+  },
+  "segunda-venezuela": {
+    "equipos": 26,
+    "conLogo": 3,
+    "wiki": "Venezuelan Segunda Division",
+    "cuando": "2026-11-06T08:16:47.681Z"
+  },
+  "copa-venezuela": {
+    "equipos": 29,
+    "conLogo": 0,
+    "wiki": "Copa Venezuela",
+    "cuando": "2026-11-06T08:16:59.611Z"
+  },
+  "brasileirao-serie-c": {
+    "equipos": 20,
+    "conLogo": 7,
+    "wiki": "2025 Campeonato Brasileiro Série C",
+    "cuando": "2026-11-06T08:17:22.457Z"
+  },
+  "thai-league-2": {
+    "equipos": 18,
+    "conLogo": 6,
+    "wiki": "2025–26 Thai League 2",
+    "cuando": "2026-11-06T08:17:29.349Z"
+  },
+  "k-league-2": {
+    "equipos": 14,
+    "conLogo": 8,
+    "wiki": "2025 K League 2",
+    "cuando": "2026-11-06T08:17:34.980Z"
+  },
+  "liga-1-indonesia": {
+    "equipos": 23,
+    "conLogo": 5,
+    "wiki": "2025–26 Liga 1",
+    "cuando": "2026-11-06T08:17:44.563Z"
+  },
+  "malaysia-super-league": {
+    "equipos": 15,
+    "conLogo": 8,
+    "wiki": "2025–26 Malaysia Super League",
+    "cuando": "2026-11-06T08:17:51.278Z"
+  },
+  "malaysia-premier-league": {
+    "equipos": 19,
+    "conLogo": 0,
+    "wiki": "Malaysian Premier League",
+    "cuando": "2026-11-06T08:17:59.910Z"
+  },
+  "malaysia-cup": {
+    "equipos": 8,
+    "conLogo": 0,
+    "wiki": "2025–26 Malaysia Cup",
+    "cuando": "2026-11-06T08:18:09.269Z"
+  },
+  "singapore-premier-league": {
+    "equipos": 15,
+    "conLogo": 0,
+    "wiki": "2025–26 Singapore Premier League",
+    "cuando": "2026-11-06T08:18:15.939Z"
+  },
+  "hong-kong-premier-league": {
+    "equipos": 10,
+    "conLogo": 5,
+    "wiki": "2025–26 Hong Kong Premier League",
+    "cuando": "2026-11-06T08:18:20.027Z"
+  },
+  "hong-kong-senior-shield": {
+    "equipos": 35,
+    "conLogo": 0,
+    "wiki": "Hong Kong Senior Shield",
+    "cuando": "2026-11-06T08:18:33.641Z"
+  },
+  "hong-kong-fa-cup": {
+    "equipos": 27,
+    "conLogo": 0,
+    "wiki": "Hong Kong FA Cup",
+    "cuando": "2026-11-06T08:18:44.020Z"
+  },
+  "copa-vietnam": {
+    "equipos": 25,
+    "conLogo": 0,
+    "wiki": "Vietnamese Cup",
+    "cuando": "2026-11-06T08:18:54.247Z"
+  },
+  "v-league-2-vietnam": {
+    "equipos": 12,
+    "conLogo": 1,
+    "wiki": "2025–26 V.League 2",
+    "cuando": "2026-11-06T08:18:58.949Z"
+  },
+  "uae-league-cup": {
+    "equipos": 18,
+    "conLogo": 0,
+    "wiki": "UAE League Cup",
+    "cuando": "2026-11-06T08:19:09.381Z"
+  },
+  "division-1-kuwait": {
+    "equipos": 8,
+    "conLogo": 5,
+    "wiki": "2025–26 Kuwaiti Division One",
+    "cuando": "2026-11-06T08:19:13.744Z"
+  },
+  "botola-2-marruecos": {
+    "equipos": 16,
+    "conLogo": 5,
+    "wiki": "2025–26 Botola Pro 2",
+    "cuando": "2026-11-06T08:01:10.043Z"
+  },
+  "primera-liga-armenia": {
+    "equipos": 13,
+    "conLogo": 4,
+    "wiki": "Armenian First League",
+    "cuando": "2026-11-06T08:19:29.064Z"
+  },
+  "copa-armenia": {
+    "equipos": 17,
+    "conLogo": 0,
+    "wiki": "Armenian Cup",
+    "cuando": "2026-11-06T08:19:35.914Z"
+  },
+  "primera-liga-azerbaiyan": {
+    "equipos": 10,
+    "conLogo": 4,
+    "wiki": "2024–25 Azerbaijan First Division",
+    "cuando": "2026-11-06T08:19:40.504Z"
+  },
+  "copa-azerbaiyan": {
+    "equipos": 18,
+    "conLogo": 0,
+    "wiki": "Azerbaijan Cup",
+    "cuando": "2026-11-06T08:19:48.370Z"
+  },
+  "primera-liga-belarus": {
+    "equipos": 18,
+    "conLogo": 9,
+    "wiki": "2025 Belarusian First League",
+    "cuando": "2026-11-06T08:19:55.088Z"
+  },
+  "copa-belarus": {
+    "equipos": 21,
+    "conLogo": 0,
+    "wiki": "Belarusian Cup",
+    "cuando": "2026-11-06T08:20:08.835Z"
+  },
+  "primera-liga-kazajistan": {
+    "equipos": 25,
+    "conLogo": 0,
+    "wiki": "Kazakhstan First League",
+    "cuando": "2026-11-06T08:20:17.352Z"
+  },
+  "copa-kazajistan": {
+    "equipos": 14,
+    "conLogo": 0,
+    "wiki": "Kazakhstan Cup",
+    "cuando": "2026-11-06T08:20:23.843Z"
+  },
+  "segunda-chile": {
+    "equipos": 16,
+    "conLogo": 0,
+    "wiki": "2025 Liga de Ascenso",
+    "cuando": "2026-11-06T08:15:13.143Z"
+  },
+  "copa-de-la-liga-peru": {
+    "equipos": 19,
+    "conLogo": 0,
+    "wiki": "2026 Liga 1 (Peru)",
+    "cuando": "2026-11-06T08:16:15.697Z"
+  },
+  "liga-expansion-mx": {
+    "equipos": 16,
+    "conLogo": 8,
+    "wiki": "Liga de Expansión MX",
+    "cuando": "2026-11-06T08:17:14.818Z"
+  }
+}

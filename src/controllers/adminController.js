@@ -6,6 +6,11 @@ const { db } = require("../config/database");
 const { isAdminHttpRequest } = require("../utils/adminHttpAuth");
 const { setFactoryEnabled, getFactoryStatus, runFactoryCycleNow, setAutoSettleEnabled } = require("../services/factoryService");
 const { preserveSettledOutcome } = require("../utils/preserveSettledOutcome");
+const {
+  getStats: getTeamsStats,
+  rebuildIndex: rebuildTeamsIndex,
+} = require("../services/teamsService");
+const { clearBodyCache } = require("../controllers/teamsController");
 
 function nowIso() {
   return new Date().toISOString();
@@ -458,6 +463,28 @@ async function createNews(req, res) {
   }
 }
 
+/** GET /api/admin/futbool/status — estado del indice de equipos/ligas */
+async function futboolStatus(req, res) {
+  try {
+    if (!(await requireAdmin(req, res))) return;
+    return res.json({ ok: true, data: getTeamsStats() });
+  } catch (e) {
+    return res.status(500).json({ ok: false, message: e.message });
+  }
+}
+
+/** POST /api/admin/futbool/reload — reindexa equipos/ligas sin reiniciar el server */
+async function futboolReload(req, res) {
+  try {
+    if (!(await requireAdmin(req, res))) return;
+    rebuildTeamsIndex();
+    clearBodyCache();
+    return res.json({ ok: true, data: getTeamsStats(), reloaded: true });
+  } catch (e) {
+    return res.status(500).json({ ok: false, message: e.message });
+  }
+}
+
 module.exports = {
   me,
   listVipRequests,
@@ -476,4 +503,6 @@ module.exports = {
   deleteModal,
   activeModalPublic,
   createNews,
+  futboolStatus,
+  futboolReload,
 };

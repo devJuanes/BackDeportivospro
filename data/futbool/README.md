@@ -28,6 +28,15 @@ Al publicar a `abet` / `abetvip` / `abetlive`, `futboolLogoService.enrichPickLog
 
 Si no hay match → string vacío (sin romper el insert).
 
+## API de equipos y ligas
+
+El índice en memoria (`src/services/teamsService.js`) también se expone por HTTP:
+
+- `GET /api/v1/leagues` · `GET /api/v1/leagues/:slug`
+- `GET /api/v1/teams` · `GET /api/v1/teams/:slug`
+
+Detalles y ejemplos: `src/docs/teams-api.md`.
+
 ## Sincronizar desde APIS/futbool
 
 ```bash
@@ -36,13 +45,17 @@ npm run futbool:sync
 node src/scripts/syncFutboolAssets.js --src="C:\Users\juanl\OneDrive\Documentos\APIS\futbool"
 ```
 
-Reinicia el server después para recargar el índice en memoria.
+Después el índice se refresca solo (`TEAMS_INDEX_TTL_MS`, default 30s) o al instante con:
+
+```bash
+curl -X POST https://api.picks.matupicks.app/api/admin/futbool/reload -H "Authorization: Bearer $ADMIN_TOKEN"
+```
 
 ## Añadir más ligas / equipos
 
 1. En el proyecto futbool: crea `scripts/configs/<slug>.js` y corre `node scripts/fetch-equipos.js --liga=<slug>` (genera JSON + PNGs).
 2. Aquí: `npm run futbool:sync`
-3. Reinicia backend.
+3. `POST /api/admin/futbool/reload` (o espera el TTL / reinicia el backend).
 
 Opcional manual en este repo:
 

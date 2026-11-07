@@ -84,6 +84,15 @@ async function getOnePrediction(req, res, next) {
   }
 }
 
+async function getAiStatus(req, res) {
+  try {
+    const { getAiStatus: readAiStatus } = require("../services/aiForecastService");
+    return res.json({ ok: true, ...readAiStatus() });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: error.message });
+  }
+}
+
 async function getDailySummary(req, res, next) {
   try {
     const tier = req.query.tier ? String(req.query.tier).trim().toLowerCase() : null;
@@ -203,6 +212,12 @@ async function apiInfo(req, res) {
       unfollow: "DELETE /api/v1/predictions/:id/follow",
       followed: "/api/v1/predictions/followed?client_id=...",
       news: "/api/v1/news",
+      leagues: "/api/v1/leagues (?q=&limit=&offset=)",
+      league: "/api/v1/leagues/:slug",
+      teams: "/api/v1/teams (?league=&q=&limit=&offset=)",
+      team: "/api/v1/teams/:slug (?league=)",
+      teamResolve: "/api/v1/teams/resolve?name=&league=",
+      aiStatus: "/api/v1/ai/status",
       health: "/health",
       demo: "/demo",
     },
@@ -215,6 +230,7 @@ module.exports = {
   listPredictions,
   getOnePrediction,
   getDailySummary,
+  getAiStatus,
   postFollow,
   deleteFollow,
   listFollowed,

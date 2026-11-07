@@ -293,6 +293,25 @@ async function runFactoryMigrations() {
       UNIQUE(user_key, target_type, target_id)
     );`,
     "CREATE INDEX IF NOT EXISTS idx_pf_community_likes_target ON pf_community_likes(target_type, target_id);",
+    `CREATE TABLE IF NOT EXISTS landapay_vip_checkouts (
+      payment_link_id TEXT PRIMARY KEY,
+      reference TEXT NOT NULL UNIQUE,
+      user_id TEXT NOT NULL,
+      email TEXT,
+      minutes INT NOT NULL,
+      amount_usd NUMERIC(10,2) NOT NULL,
+      payment_id TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      granted_at TIMESTAMPTZ
+    );`,
+    "CREATE INDEX IF NOT EXISTS idx_landapay_vip_checkouts_user ON landapay_vip_checkouts(user_id);",
+    "CREATE INDEX IF NOT EXISTS idx_landapay_vip_checkouts_payment ON landapay_vip_checkouts(payment_id);",
+    `CREATE TABLE IF NOT EXISTS landapay_webhook_events (
+      event_id TEXT PRIMARY KEY,
+      event_type TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );`,
   ];
 
   for (const sql of statements) {

@@ -20,5 +20,7 @@ router.get("/modals", ctrl.listModals);
 router.post("/modals", ctrl.upsertModal);
 router.delete("/modals/:id", ctrl.deleteModal);
 router.post("/news", ctrl.createNews);
+router.get("/futbool/status", ctrl.futboolStatus);
+router.post("/futbool/reload", ctrl.futboolReload);
 
 module.exports = router;

@@ -42,6 +42,34 @@ function otpSecret() {
   );
 }
 
+/**
+ * Verificación de correo en registro. Desactivada por defecto.
+ * Activa con EMAIL_VERIFICATION_ENABLED=true + SMTP (p. ej. Zoho/SohoMail).
+ */
+function isEmailVerificationEnabled() {
+  const flag = String(process.env.EMAIL_VERIFICATION_ENABLED || "")
+    .trim()
+    .toLowerCase();
+  if (flag === "false" || flag === "0" || flag === "off" || flag === "no") {
+    return false;
+  }
+  if (flag === "true" || flag === "1" || flag === "on" || flag === "yes") {
+    return isSmtpConfigured();
+  }
+  // Sin flag explícito: solo si SMTP está listo (compat). Preferir flag=false.
+  return false;
+}
+
+function getEmailVerificationStatus() {
+  const enabled = isEmailVerificationEnabled();
+  return {
+    enabled,
+    smtpConfigured: isSmtpConfigured(),
+    provider: process.env.SMTP_HOST || null,
+    from: process.env.SMTP_FROM || process.env.SMTP_USER || null,
+  };
+}
+
 function normalizeEmail(email) {
   return String(email || "")
     .trim()
@@ -64,8 +92,15 @@ function hashCode(email, code, salt) {
     .digest("hex");
 }
 
+/** Código alfanumérico (sin 0/O/1/I para evitar confusión). */
 function generateCode() {
-  return String(crypto.randomInt(100000, 999999));
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  const bytes = crypto.randomBytes(6);
+  let out = "";
+  for (let i = 0; i < 6; i += 1) {
+    out += alphabet[bytes[i] % alphabet.length];
+  }
+  return out;
 }
 
 function signPayload(obj) {
@@ -115,9 +150,18 @@ function verifyEmailVerifiedToken(token) {
 }
 
 /**
- * Envía código de 6 dígitos. Devuelve `otpToken` opaco (hash del código, sin BD).
+ * Envía código alfanumérico de 6 caracteres. Devuelve `otpToken` opaco (hash, sin BD).
  */
 async function sendVerificationCode(rawEmail) {
+  if (!isEmailVerificationEnabled()) {
+    const err = new Error(
+      "La verificación por correo está deshabilitada. El registro no requiere código.",
+    );
+    err.status = 503;
+    err.code = "email_verification_disabled";
+    throw err;
+  }
+
   const email = normalizeEmail(rawEmail);
   if (!isValidEmail(email)) {
     const err = new Error("Correo no válido.");
@@ -176,8 +220,9 @@ async function verifyCode(rawEmail, rawCode, otpToken) {
   const email = normalizeEmail(rawEmail);
   const code = String(rawCode || "")
     .trim()
-    .replace(/\s/g, "");
-  if (!isValidEmail(email) || !/^\d{6}$/.test(code)) {
+    .replace(/\s/g, "")
+    .toUpperCase();
+  if (!isValidEmail(email) || !/^[A-Z0-9]{6}$/.test(code)) {
     const err = new Error("Código o correo inválido.");
     err.status = 400;
     throw err;
@@ -252,5 +297,7 @@ module.exports = {
   verifyCode,
   claimVipTrial,
   verifyEmailVerifiedToken,
+  isEmailVerificationEnabled,
+  getEmailVerificationStatus,
   VIP_TRIAL_DAYS,
 };

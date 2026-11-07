@@ -77,6 +77,12 @@ Puerto por defecto: **3009** (`PORT` en `.env`).
 - `POST /api/factory/sources/sync-default`
 - `GET /api/whatsapp/status`
 - `POST /api/whatsapp/test`
+- `GET /api/v1/leagues` (equipos y ligas: `?q=`, `?limit=`, `?offset=`)
+- `GET /api/v1/leagues/:slug` (incluye los equipos de la liga)
+- `GET /api/v1/teams` (`?league=`, `?q=`, `?limit=`, `?offset=`)
+- `GET /api/v1/teams/:slug` (`?league=` desambigua)
+- `GET /api/admin/futbool/status`
+- `POST /api/admin/futbool/reload` (reindexa equipos/ligas sin reiniciar)
 
 ## Cron jobs configurados
 
@@ -94,7 +100,20 @@ Puerto por defecto: **3009** (`PORT` en `.env`).
 3. Partido terminado → `outcome` won/lost/pending, `state=ended`, `live_ended=true` (sale del feed “en vivo”).
 4. Tips `state=live` de días anteriores → cleanup automático (no quedan “en vivo hace 2 días”).
 
-Ver también: `src/docs/matudb.md` (auto-publish + MatuDB).
+Ver también: `src/docs/matudb.md` (auto-publish + MatuDB) y `src/docs/teams-api.md` (API de equipos y ligas).
+
+## API de equipos y ligas
+
+Catálogo local (sin base de datos) servido desde `data/futbool`:
+
+- `GET /api/v1/leagues` y `GET /api/v1/leagues/:slug`
+- `GET /api/v1/teams` (`?league=`, `?q=`) y `GET /api/v1/teams/:slug`
+
+Todo se indexa en memoria al arrancar (58 ligas / 952 equipos) y se responde con `ETag` +
+`Cache-Control` (el móvil recibe `304` sin body). El índice se refresca solo
+(`TEAMS_INDEX_TTL_MS`, default 30s) o al instante con `POST /api/admin/futbool/reload`.
+
+Detalles, ejemplos y variables: `src/docs/teams-api.md`.
 
 ## Bot WhatsApp (chatbot)
 

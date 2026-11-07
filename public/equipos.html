@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>⚽</text></svg>" />
+  <title>DeportivosPro — Equipos y ligas</title>
+  <style>
+    :root {
+      --bg: #0b1220; --bg2: #101a2e; --card: #141f33; --card2: #182740;
+      --accent: #22c55e; --accent2: #4ade80; --gold: #f59e0b;
+      --text: #e8eef8; --muted: #8fa3bf; --border: #243552;
+      --shadow: 0 10px 30px rgba(0, 0, 0, .35);
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      background: linear-gradient(160deg, var(--bg), var(--bg2) 50%, #0d1528);
+      color: var(--text); min-height: 100vh;
+    }
+    a { color: var(--accent2); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    header {
+      padding: 1.1rem 1rem .9rem; border-bottom: 1px solid var(--border);
+      background: rgba(11, 18, 32, .85); backdrop-filter: blur(8px);
+      position: sticky; top: 0; z-index: 20;
+    }
+    .head-row { max-width: 1280px; margin: 0 auto; display: flex; flex-wrap: wrap; gap: .75rem; align-items: center; }
+    .brand { display: flex; align-items: center; gap: .6rem; margin-right: auto; }
+    .brand h1 { font-size: 1.15rem; margin: 0; letter-spacing: .2px; }
+    .brand .sub { color: var(--muted); font-size: .8rem; }
+    .counts { color: var(--muted); font-size: .85rem; white-space: nowrap; }
+    .counts b { color: var(--text); }
+
+    .toolbar { max-width: 1280px; margin: .9rem auto 0; display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+    input[type="search"], select {
+      background: var(--card); color: var(--text); border: 1px solid var(--border);
+      border-radius: 10px; padding: .55rem .75rem; font-size: .9rem; min-width: 220px;
+    }
+    input[type="search"]:focus, select:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+    button {
+      background: var(--card); color: var(--text); border: 1px solid var(--border);
+      border-radius: 10px; padding: .55rem .85rem; cursor: pointer; font-size: .9rem;
+    }
+    button:hover { border-color: var(--accent); color: var(--accent2); }
+    button.primary { background: #166534; border-color: var(--accent); color: #ecfdf5; font-weight: 600; }
+    button.primary:hover { background: #15803d; color: #ecfdf5; }
+    .chips { display: flex; flex-wrap: wrap; gap: .4rem; max-width: 1280px; margin: .7rem auto 0; }
+    .chip {
+      background: var(--card); border: 1px solid var(--border); color: var(--muted);
+      border-radius: 999px; padding: .3rem .7rem; font-size: .78rem; cursor: pointer;
+    }
+    .chip.active { border-color: var(--accent); color: var(--accent2); background: #12251b; }
+
+    main { max-width: 1280px; margin: 1.2rem auto 3rem; padding: 0 1rem; }
+    .crumb { display: flex; align-items: center; gap: .6rem; margin-bottom: 1rem; flex-wrap: wrap; }
+    .crumb h2 { margin: 0; font-size: 1.35rem; }
+    .crumb .meta { color: var(--muted); font-size: .85rem; }
+    .section-title { font-size: .8rem; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 1.4rem 0 .7rem; }
+
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: .9rem; }
+    .grid.teams { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+
+    .card {
+      background: var(--card); border: 1px solid var(--border); border-radius: 14px;
+      padding: 1rem; display: flex; flex-direction: column; gap: .55rem; box-shadow: var(--shadow);
+    }
+    .card.league { cursor: pointer; transition: transform .12s ease, border-color .12s ease; }
+    .card.league:hover { transform: translateY(-3px); border-color: var(--accent); }
+    .card .head { display: flex; align-items: center; gap: .7rem; }
+    .crest {
+      width: 54px; height: 54px; flex: 0 0 auto; border-radius: 12px; background: #0d1528;
+      border: 1px solid var(--border); display: grid; place-items: center; overflow: hidden;
+    }
+    .crest img { width: 100%; height: 100%; object-fit: contain; padding: 4px; }
+    .crest svg { width: 70%; height: 70%; opacity: .5; }
+    .crest.initials {
+      font-weight: 800; font-size: 1.05rem; letter-spacing: .5px; color: #cbd5e1;
+      background: linear-gradient(145deg, #1c2b47, #131f35);
+    }
+    .card h3 { margin: 0; font-size: 1rem; line-height: 1.25; }
+    .card .sub { color: var(--muted); font-size: .8rem; }
+    .tags { display: flex; flex-wrap: wrap; gap: .3rem; margin-top: .2rem; }
+    .tag {
+      font-size: .7rem; color: var(--muted); background: #0f1a2c; border: 1px solid var(--border);
+      border-radius: 999px; padding: .15rem .5rem;
+    }
+    .tag.gold { color: var(--gold); border-color: #4a3410; background: #241a08; }
+    .tag.green { color: var(--accent2); border-color: #1d4d2c; background: #10261a; }
+    .facts { display: grid; grid-template-columns: auto 1fr; gap: .2rem .6rem; font-size: .8rem; color: var(--muted); margin-top: .3rem; }
+    .facts b { color: var(--text); font-weight: 600; }
+    .empty, .error { text-align: center; padding: 2.5rem 1rem; color: var(--muted); }
+    .error { color: #f87171; }
+    .loading { text-align: center; padding: 2.5rem; color: var(--muted); }
+    .spinner {
+      width: 26px; height: 26px; margin: 0 auto .8rem; border-radius: 50%;
+      border: 3px solid var(--border); border-top-color: var(--accent); animation: spin .8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    footer { text-align: center; color: var(--muted); font-size: .75rem; padding: 1.5rem 1rem 2.5rem; }
+    .hidden { display: none !important; }
+    @media (max-width: 560px) {
+      .brand h1 { font-size: 1rem; }
+      .toolbar input, .toolbar select { min-width: 100%; width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="head-row">
+      <div class="brand">
+        <button id="btn-back" class="hidden">← Volver</button>
+        <div>
+          <h1>⚽ Equipos y ligas</h1>
+          <div class="sub" id="subtitle">Catálogo completo con escudos</div>
+        </div>
+      </div>
+      <div class="counts" id="counts"></div>
+    </div>
+
+    <div class="toolbar">
+      <input type="search" id="search" placeholder="Buscar liga o equipo…" autocomplete="off" />
+      <select id="country"><option value="">Todos los países</option></select>
+      <button id="btn-reset">Limpiar</button>
+    </div>
+    <div class="chips" id="chips"></div>
+  </header>
+
+  <main id="view"><div class="loading"><div class="spinner"></div>Cargando catálogo…</div></main>
+
+  <footer>
+    Datos locales desde <code>data/futbool</code> · API <code>/api/v1/leagues</code> y <code>/api/v1/teams</code> ·
+    <a href="/demo/">Demo de pronósticos</a>
+  </footer>
+
+  <script>
+    // ------------------------------------------------------------------
+    // Config: idealmente se sirve desde el propio API (mismo origen).
+    // Live Server (5500) / file:// no tienen /api → usamos localhost:3009.
+    // Override: equipos.html?api=http://localhost:3009
+    // ------------------------------------------------------------------
+    const params = new URLSearchParams(location.search);
+    const savedApi = localStorage.getItem("dp_teams_api");
+    const pageOrigin =
+      location.origin && location.origin !== "null" ? location.origin : "";
+
+    function resolveApiBase() {
+      const fromQuery = params.get("api");
+      if (fromQuery) {
+        const base = fromQuery.replace(/\/+$/, "");
+        try { localStorage.setItem("dp_teams_api", base); } catch (_) { /* ignore */ }
+        return base;
+      }
+      if (savedApi) return String(savedApi).replace(/\/+$/, "");
+
+      const port = String(location.port || "");
+      const isStaticPreview =
+        location.protocol === "file:" ||
+        !pageOrigin ||
+        port === "5500" ||
+        port === "5501" ||
+        port === "5502" ||
+        /\.github\.io$/i.test(location.hostname);
+
+      if (isStaticPreview) return "http://localhost:3009";
+      return pageOrigin;
+    }
+
+    const API = resolveApiBase();
+    const origin = API; // logos /assets también salen del API
+
+    const PLACEHOLDER = `<svg viewBox="0 0 24 24" fill="none" stroke="#8fa3bf" stroke-width="1.6">
+      <circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>`;
+
+    const state = { leagues: [], teams: [], league: null, q: "", country: "" };
+
+    const el = (id) => document.getElementById(id);
+    const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => (
+      { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
+    ));
+
+    /** Iniciales para cuando el equipo o liga no tiene escudo. */
+    function initials(name) {
+      const words = String(name || "").trim().split(/\s+/).filter(Boolean);
+      if (!words.length) return "?";
+      if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
+      return (words[0][0] + words[1][0]).toUpperCase();
+    }
+
+    /**
+     * Los logos vienen con la URL publica del API (produccion).
+     * Si la pagina se sirve localmente, los descargamos del mismo origen
+     * para que funcionen aunque el server publico no tenga ese archivo.
+     */
+    function logoSrc(url) {
+      if (!url) return "";
+      const marker = "/assets/leagues/";
+      const at = url.indexOf(marker);
+      if (at === -1 || !origin) return url;
+      return origin + url.slice(at);
+    }
+
+    function crest(url, name) {
+      if (!url) {
+        return `<div class="crest initials" title="${esc(name)}">${esc(initials(name))}</div>`;
+      }
+      return `<div class="crest"><img loading="lazy" src="${esc(logoSrc(url))}" alt="${esc(name)}"
+        onerror="this.parentNode.innerHTML='<span class=\\'initials\\'>${esc(initials(name))}</span>'" /></div>`;
+    }
+
+    async function api(path) {
+      const res = await fetch(`${API}${path}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status} en ${path}`);
+      const json = await res.json();
+      if (json && json.ok === false) throw new Error(json.error || "Error de la API");
+      return json;
+    }
+
+    // ----------------------------- render -----------------------------
+    function leagueCard(l) {
+      const tags = [];
+      if (l.pais) tags.push(`<span class="tag">${esc(l.pais)}</span>`);
+      if (l.temporada) tags.push(`<span class="tag">${esc(l.temporada)}</span>`);
+      tags.push(`<span class="tag green">${l.teamCount} equipos</span>`);
+      return `<article class="card league" data-slug="${esc(l.slug)}" tabindex="0">
+        <div class="head">
+          ${crest(l.logoUrl, l.nombre)}
+          <div>
+            <h3>${esc(l.nombre)}</h3>
+            <div class="sub">${esc(l.slug)}</div>
+          </div>
+        </div>
+        <div class="tags">${tags.join("")}</div>
+      </article>`;
+    }
+
+    function teamCard(t) {
+      const facts = [];
+      if (t.ciudad) facts.push(["Ciudad", esc(t.ciudad)]);
+      if (t.estadio) facts.push(["Estadio", esc(t.estadio)]);
+      if (t.capacidad) facts.push(["Aforo", Number(t.capacidad).toLocaleString("es")]);
+      if (t.fundacion) facts.push(["Fundación", esc(t.fundacion)]);
+      const tags = [];
+      if (t.apodo) tags.push(`<span class="tag gold">${esc(t.apodo)}</span>`);
+      if (t.abreviatura) tags.push(`<span class="tag">${esc(t.abreviatura)}</span>`);
+      const site = t.sitioWeb
+        ? `<a href="${esc(t.sitioWeb)}" target="_blank" rel="noopener">Sitio oficial ↗</a>` : "";
+      return `<article class="card">
+        <div class="head">
+          ${crest(t.logoUrl, t.nombre)}
+          <div>
+            <h3>${esc(t.nombre)}</h3>
+            <div class="sub">${esc(t.nombreOficial || t.leagueName || "")}</div>
+          </div>
+        </div>
+        ${tags.length ? `<div class="tags">${tags.join("")}</div>` : ""}
+        ${facts.length ? `<div class="facts">${facts.map(([k, v]) => `<span>${k}</span><b>${v}</b>`).join("")}</div>` : ""}
+        ${site ? `<div class="sub">${site}</div>` : ""}
+      </article>`;
+    }
+
+    function renderLeagues() {
+      const list = state.leagues.filter((l) => {
+        const q = state.q.toLowerCase();
+        const hitQ = !q || [l.nombre, l.slug, l.pais].some((v) => String(v || "").toLowerCase().includes(q));
+        const hitC = !state.country || l.pais === state.country;
+        return hitQ && hitC;
+      });
+      const teams = state.leagues.reduce((acc, l) => acc + (l.teamCount || 0), 0);
+      el("counts").innerHTML = `<b>${state.leagues.length}</b> ligas · <b>${teams}</b> equipos`;
+      el("subtitle").textContent = "Todas las ligas con sus escudos";
+      el("btn-back").classList.add("hidden");
+
+      if (!list.length) {
+        el("view").innerHTML = `<div class="empty">Sin resultados para "${esc(state.q)}"</div>`;
+        return;
+      }
+      el("view").innerHTML = `<div class="section-title">Ligas (${list.length})</div>
+        <div class="grid">${list.map(leagueCard).join("")}</div>`;
+
+      el("view").querySelectorAll(".card.league").forEach((card) => {
+        const open = () => openLeague(card.dataset.slug);
+        card.addEventListener("click", open);
+        card.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } });
+      });
+    }
+
+    function renderTeams() {
+      const l = state.league;
+      if (!l) return renderLeagues();
+      const q = state.q.toLowerCase();
+      const list = state.teams.filter((t) => !q || [t.nombre, t.nombreOficial, t.apodo, t.abreviatura, t.ciudad]
+        .some((v) => String(v || "").toLowerCase().includes(q)));
+
+      el("counts").innerHTML = `<b>${state.leagues.length}</b> ligas · <b>${l.teamCount}</b> equipos en ${esc(l.nombre)}`;
+      el("subtitle").textContent = l.pais ? `${l.nombre} · ${l.pais}` : l.nombre;
+      el("btn-back").classList.remove("hidden");
+
+      const meta = [l.temporada, l.actualizado ? `actualizado ${String(l.actualizado).slice(0, 10)}` : ""]
+        .filter(Boolean).join(" · ");
+
+      el("view").innerHTML = `<div class="crumb">
+          <h2>${esc(l.nombre)}</h2>
+          <span class="meta">${esc(meta)}</span>
+        </div>
+        ${list.length ? `<div class="grid teams">${list.map(teamCard).join("")}</div>`
+          : `<div class="empty">Sin equipos que coincidan con "${esc(state.q)}"</div>`}`;
+    }
+
+    // ----------------------------- datos ------------------------------
+    async function loadLeagues() {
+      const json = await api("/api/v1/leagues?limit=500");
+      state.leagues = json.data || [];
+      renderCountries();
+      renderChips();
+      renderLeagues();
+    }
+
+    async function openLeague(slug) {
+      el("view").innerHTML = `<div class="loading"><div class="spinner"></div>Cargando equipos…</div>`;
+      try {
+        const json = await api(`/api/v1/leagues/${encodeURIComponent(slug)}`);
+        state.league = json.data;
+        state.teams = json.data.teams || [];
+        state.q = "";
+        el("search").value = "";
+        location.hash = `#/liga/${slug}`;
+        renderTeams();
+      } catch (err) {
+        el("view").innerHTML = `<div class="error">${esc(err.message)}</div>`;
+      }
+    }
+
+    function backToLeagues() {
+      state.league = null;
+      state.teams = [];
+      state.q = "";
+      el("search").value = "";
+      location.hash = "";
+      renderLeagues();
+    }
+
+    function renderCountries() {
+      const countries = [...new Set(state.leagues.map((l) => l.pais).filter(Boolean))].sort();
+      el("country").innerHTML = `<option value="">Todos los países</option>` +
+        countries.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join("");
+    }
+
+    function renderChips() {
+      const countries = [...new Set(state.leagues.map((l) => l.pais).filter(Boolean))].sort();
+      el("chips").innerHTML = countries.map((c) =>
+        `<button class="chip" data-country="${esc(c)}">${esc(c)}</button>`).join("");
+      el("chips").querySelectorAll(".chip").forEach((chip) => {
+        chip.addEventListener("click", () => {
+          state.country = state.country === chip.dataset.country ? "" : chip.dataset.country;
+          el("country").value = state.country;
+          el("chips").querySelectorAll(".chip").forEach((c) =>
+            c.classList.toggle("active", c.dataset.country === state.country));
+          renderLeagues();
+        });
+      });
+    }
+
+    // ----------------------------- eventos ----------------------------
+    let timer = null;
+    el("search").addEventListener("input", (e) => {
+      state.q = e.target.value.trim();
+      clearTimeout(timer);
+      timer = setTimeout(() => (state.league ? renderTeams() : renderLeagues()), 120);
+    });
+    el("country").addEventListener("change", (e) => {
+      state.country = e.target.value;
+      if (state.league) backToLeagues(); else renderLeagues();
+    });
+    el("btn-reset").addEventListener("click", () => {
+      state.q = ""; state.country = "";
+      el("search").value = ""; el("country").value = "";
+      el("chips").querySelectorAll(".chip").forEach((c) => c.classList.remove("active"));
+      if (state.league) backToLeagues(); else renderLeagues();
+    });
+    el("btn-back").addEventListener("click", backToLeagues);
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape" && state.league) backToLeagues(); });
+    window.addEventListener("hashchange", () => {
+      const m = location.hash.match(/^#\/liga\/([\w-]+)$/);
+      if (m && (!state.league || state.league.slug !== m[1])) openLeague(m[1]);
+      if (!m && state.league) backToLeagues();
+    });
+
+    // ----------------------------- inicio -----------------------------
+    (async function init() {
+      try {
+        await loadLeagues();
+        const m = location.hash.match(/^#\/liga\/([\w-]+)$/);
+        if (m) await openLeague(m[1]);
+      } catch (err) {
+        el("view").innerHTML = `<div class="error">
+          No se pudo cargar el catálogo.<br /><br />
+          <b>${esc(err.message)}</b><br /><br />
+          API: <code>${esc(API)}</code><br /><br />
+          Arranca el backend (<code>npm run dev</code> en BackDeportivospro)
+          y abre <a href="http://localhost:3009/equipos.html">http://localhost:3009/equipos.html</a>
+          (no uses Live Server 5500).<br /><br />
+          <button class="primary" onclick="location.reload()">Reintentar</button>
+        </div>`;
+      }
+    })();
+  </script>
+</body>
+</html>

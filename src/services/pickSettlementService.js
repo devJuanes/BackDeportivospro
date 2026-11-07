@@ -81,13 +81,14 @@ function isLiveStatus(status) {
 }
 
 /** Fixtures del día: live + finalizados (para early settle + marcador). */
-async function loadResultsForDate(dateIso) {
+async function loadResultsForDate(dateIso, sport = "football") {
   const byPair = new Map();
   let dbRows = [];
+  const sportKey = String(sport || "football").toLowerCase() || "football";
   try {
-    dbRows = await getFixturesByDateSport(dateIso, "football");
+    dbRows = await getFixturesByDateSport(dateIso, sportKey);
   } catch (error) {
-    logger.warn(`Settlement fixtures_cache ${dateIso}: ${error.message}`);
+    logger.warn(`Settlement fixtures_cache ${dateIso}/${sportKey}: ${error.message}`);
   }
 
   const put = (ta, tb, hg, ag, status, minute, source) => {
@@ -120,16 +121,18 @@ async function loadResultsForDate(dateIso) {
     put(f.team_a, f.team_b, f.home_goals, f.away_goals, f.status, f.minute, "cache");
   }
 
-  try {
-    const { isConfigured, getSoccersFootballFixturesForDate } = require("./soccersApiService");
-    if (isConfigured()) {
-      const soc = await getSoccersFootballFixturesForDate(dateIso);
-      for (const s of soc) {
-        put(s.homeTeam, s.awayTeam, s.homeGoals, s.awayGoals, s.status, s.minute, "soccersapi");
+  if (sportKey === "football" || sportKey === "soccer") {
+    try {
+      const { isConfigured, getSoccersFootballFixturesForDate } = require("./soccersApiService");
+      if (isConfigured()) {
+        const soc = await getSoccersFootballFixturesForDate(dateIso);
+        for (const s of soc) {
+          put(s.homeTeam, s.awayTeam, s.homeGoals, s.awayGoals, s.status, s.minute, "soccersapi");
+        }
       }
+    } catch (error) {
+      logger.warn(`Settlement SoccersAPI ${dateIso}: ${error.message}`);
     }
-  } catch (error) {
-    logger.warn(`Settlement SoccersAPI ${dateIso}: ${error.message}`);
   }
 
   return [...byPair.values()];
@@ -184,20 +187,43 @@ async function settleRowsForTable(table, config) {
     ? `id, match_date, sport, ${homeField}, ${awayField}, ${pickField}, ${statusField}, home_goals, away_goals, minute, live_ended, outcome`
     : `id, match_date, ${homeField}, ${awayField}, ${pickField}, ${statusField}, home_goals, away_goals, minute`;
 
+  const tz = process.env.FACTORY_TIMEZONE || "America/Bogota";
+  const today = formatDateInTimezone(new Date(), tz);
+  const yesterdayDate = new Date();
+  yesterdayDate.setDate(yesterdayDate.getDate() - 2);
+  const since = formatDateInTimezone(yesterdayDate, tz);
+
   let picks = [];
-  let { data, error } = await db.from(table).select(selectCols).limit(500);
+  // Solo días recientes: evita que 500 pending viejos bloqueen la liquidación de hoy.
+  let query = db
+    .from(table)
+    .select(selectCols)
+    .gte("match_date", since)
+    .lte("match_date", today)
+    .limit(800);
+  let { data, error } = await query;
   if (error) {
     const msg = String(error.message || "").toLowerCase();
     if (msg.includes("home_goals") || msg.includes("live_ended") || msg.includes("column")) {
       const slimCols = hasSport
         ? `id, match_date, sport, ${homeField}, ${awayField}, ${pickField}, ${statusField}, home_goals, away_goals, minute`
         : `id, match_date, ${homeField}, ${awayField}, ${pickField}, ${statusField}, home_goals, away_goals, minute`;
-      const retry = await db.from(table).select(slimCols).limit(500);
+      const retry = await db
+        .from(table)
+        .select(slimCols)
+        .gte("match_date", since)
+        .lte("match_date", today)
+        .limit(800);
       if (retry.error) {
         const slim2 = hasSport
           ? `id, match_date, sport, ${homeField}, ${awayField}, ${pickField}, ${statusField}`
           : `id, match_date, ${homeField}, ${awayField}, ${pickField}, ${statusField}`;
-        const retry2 = await db.from(table).select(slim2).limit(500);
+        const retry2 = await db
+          .from(table)
+          .select(slim2)
+          .gte("match_date", since)
+          .lte("match_date", today)
+          .limit(800);
         data = retry2.data;
         error = retry2.error;
       } else {
@@ -236,20 +262,22 @@ async function settleRowsForTable(table, config) {
 
   if (!picks.length) return { updated: 0, scored: 0 };
 
-  const byDate = new Map();
+  // Agrupar por fecha + deporte para cargar fixtures correctos (fútbol/NBA/tenis/hockey).
+  const byDateSport = new Map();
   const noDate = [];
   for (const p of picks) {
-    if (hasSport) {
-      const sp = String(p.sport || "football").toLowerCase();
-      if (sp && sp !== "football" && sp !== "soccer") continue;
-    }
     const d = String(p.match_date || "").slice(0, 10);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) {
       noDate.push(p);
       continue;
     }
-    if (!byDate.has(d)) byDate.set(d, []);
-    byDate.get(d).push(p);
+    let sp = hasSport
+      ? String(p.sport || "football").toLowerCase() || "football"
+      : "football";
+    if (sp === "soccer") sp = "football";
+    const key = `${d}|${sp}`;
+    if (!byDateSport.has(key)) byDateSport.set(key, { date: d, sport: sp, picks: [] });
+    byDateSport.get(key).picks.push(p);
   }
 
   let updated = 0;
@@ -346,6 +374,8 @@ async function settleRowsForTable(table, config) {
         patch.live_ended = true;
       } else {
         patch[statusField] = outcome;
+        // También outcome para front/MatuDB (mapAbetRow lo lee).
+        patch.outcome = outcome;
       }
     } else if (isLiveTable && finished) {
       // Partido terminó: intentar outcome; pending SOLO si no hay resultado previo ni evaluable.
@@ -398,10 +428,10 @@ async function settleRowsForTable(table, config) {
     await processPick(pick, null);
   }
 
-  for (const [dateIso, datePicks] of byDate) {
+  for (const { date: dateIso, sport, picks: datePicks } of byDateSport.values()) {
     let results = [];
     try {
-      results = await loadResultsForDate(dateIso);
+      results = await loadResultsForDate(dateIso, sport);
     } catch {
       results = [];
     }

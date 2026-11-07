@@ -2,9 +2,11 @@ const {
   sendVerificationCode,
   verifyCode,
   claimVipTrial,
+  getEmailVerificationStatus,
   VIP_TRIAL_DAYS,
 } = require("../services/emailOtpService");
 const passwordReset = require("../services/passwordResetService");
+const googleOauth = require("../services/googleOauthService");
 const { getUserIdFromBearer, getEmailFromBearer } = require("../utils/jwtAdmin");
 const logger = require("../utils/logger");
 
@@ -16,6 +18,10 @@ function getBearerUser(req) {
   return { id, email };
 }
 
+function getEmailVerification(req, res) {
+  return res.json({ ok: true, ...getEmailVerificationStatus() });
+}
+
 async function postSendCode(req, res) {
   try {
     const email = req.body?.email;
@@ -25,7 +31,11 @@ async function postSendCode(req, res) {
     const status = e.status || 500;
     if (status >= 500) logger.error("[auth-trial] sendCode", e);
     else logger.warn(`[auth-trial] sendCode ${status}: ${e.message}`);
-    return res.status(status).json({ error: e.message || "Error al enviar código" });
+    return res.status(status).json({
+      error: e.message || "Error al enviar código",
+      code: e.code,
+      emailVerification: getEmailVerificationStatus(),
+    });
   }
 }
 
@@ -115,11 +125,49 @@ async function postPasswordConfirm(req, res) {
   }
 }
 
+/** POST /api/auth/google/token — canje code+PKCE → id_token (secret solo en servidor). */
+async function postGoogleToken(req, res) {
+  try {
+    const { code, codeVerifier, redirectUri } = req.body || {};
+    const result = await googleOauth.exchangeAuthorizationCode({
+      code,
+      codeVerifier,
+      redirectUri,
+    });
+    return res.json({
+      ok: true,
+      id_token: result.idToken,
+      expires_in: result.expiresIn,
+    });
+  } catch (e) {
+    const status = e.status || 500;
+    if (status >= 500) logger.error("[auth] googleToken", e);
+    else logger.warn(`[auth] googleToken ${status}: ${e.code || e.message}`);
+    return res.status(status).json({
+      ok: false,
+      error:
+        e.message ||
+        "No pudimos completar el acceso con Google. Intenta de nuevo.",
+      code: e.code,
+    });
+  }
+}
+
+function getGoogleOauthStatus(_req, res) {
+  return res.json({
+    ok: true,
+    configured: googleOauth.isGoogleOauthConfigured(),
+  });
+}
+
 module.exports = {
+  getEmailVerification,
   postSendCode,
   postVerifyCode,
   postClaimTrial,
   postPasswordForgot,
   postPasswordVerifyCode,
   postPasswordConfirm,
+  postGoogleToken,
+  getGoogleOauthStatus,
 };

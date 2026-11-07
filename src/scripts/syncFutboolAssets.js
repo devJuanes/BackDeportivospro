@@ -89,7 +89,8 @@ function main() {
   const ligas = fs.readdirSync(path.join(DEST, "ligas")).filter((f) => f.endsWith(".json")).length;
   const pngs = countPng(path.join(DEST, "logos"));
   console.log(JSON.stringify({ ok: true, ligas, pngs, dest: DEST }, null, 2));
-  console.log("Listo. Reinicia el API o usa reloadLogoCache para indexar.");
+  console.log("Listo. El indice se refresca solo (TTL) o al instante con:");
+  console.log("  POST /api/admin/futbool/reload");
 }
 
 main();

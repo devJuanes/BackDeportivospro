@@ -22,22 +22,19 @@ function resolveGrantMinutes(meta) {
 }
 
 /**
- * Idempotencia por `reference` (única por cobro): webhook y confirm-return no duplican tiempo VIP.
- * Acumula sobre vip_expires_at vigente.
- * @returns {{ granted: boolean, vipExpiresAt: string | null, alreadyRedeemed: boolean, minutes: number }}
+ * Otorga minutos VIP por referencia (idempotente).
+ * Preferir esta vía con metadata de Landa Pay.
  */
-async function grantVipAfterApprovedPayment(userId, reference, paymentTransactionId) {
-  const meta = parsePfVipMetaFromReference(reference);
-  if (!meta || meta.userId !== userId) {
-    return { granted: false, vipExpiresAt: null, alreadyRedeemed: false, minutes: 0 };
-  }
-  const minutes = resolveGrantMinutes(meta);
-  if (!minutes || minutes <= 0) {
+async function grantVipMinutes(userId, reference, paymentTransactionId, minutes) {
+  const mins = Math.floor(Number(minutes) || 0);
+  const uid = String(userId || "").trim();
+  const ref = String(reference || "").trim();
+  if (!uid || !ref || mins <= 0) {
     return { granted: false, vipExpiresAt: null, alreadyRedeemed: false, minutes: 0 };
   }
 
-  const refEsc = sqlEscape(reference);
-  const uidEsc = sqlEscape(userId);
+  const refEsc = sqlEscape(ref);
+  const uidEsc = sqlEscape(uid);
   const tid =
     paymentTransactionId != null && String(paymentTransactionId).trim()
       ? sqlEscape(String(paymentTransactionId).trim())
@@ -57,8 +54,8 @@ upd AS (
     vip_expires_at = (
       CASE
         WHEN vip_expires_at IS NOT NULL AND vip_expires_at > NOW()
-        THEN vip_expires_at + (${minutes}::text || ' minutes')::interval
-        ELSE NOW() + (${minutes}::text || ' minutes')::interval
+        THEN vip_expires_at + (${mins}::text || ' minutes')::interval
+        ELSE NOW() + (${mins}::text || ' minutes')::interval
       END
     ),
     updated_at = NOW()
@@ -77,24 +74,52 @@ SELECT
       ? data[0]
       : data?.rows?.[0] ?? (data && typeof data === "object" ? data : null);
     const inserted = Number(row?.inserted ?? row?.INSERTED ?? 0);
-    const vipExpiresAt = row?.vip_expires_at ?? row?.VIP_EXPIRES_AT ?? null;
+    let vipExpiresAt = row?.vip_expires_at ?? row?.VIP_EXPIRES_AT ?? null;
     const granted = inserted > 0 && vipExpiresAt != null;
     const alreadyRedeemed = inserted === 0;
+    if (alreadyRedeemed && !vipExpiresAt) {
+      try {
+        const look = await executeRawSql(`
+SELECT vip_expires_at::text AS vip_expires_at
+FROM pf_users
+WHERE id::text = '${uidEsc}' OR firebase_uid = '${uidEsc}'
+LIMIT 1;
+`);
+        const lookRow = Array.isArray(look)
+          ? look[0]
+          : look?.rows?.[0] ?? look;
+        vipExpiresAt = lookRow?.vip_expires_at ?? lookRow?.VIP_EXPIRES_AT ?? null;
+      } catch {
+        /* ignore */
+      }
+    }
     if (granted) {
       logger.info(
-        `[vip] Otorgado user=${userId} ref_tail=${reference.slice(-28)} minutes=${minutes}`,
+        `[vip] Otorgado/extendido user=${uid} ref_tail=${ref.slice(-28)} minutes=${mins}`,
       );
     }
     return {
       granted,
       vipExpiresAt: vipExpiresAt ? String(vipExpiresAt) : null,
       alreadyRedeemed,
-      minutes,
+      minutes: mins,
     };
   } catch (e) {
-    logger.error("[vip] grantVipAfterApprovedPayment", e);
+    logger.error("[vip] grantVipMinutes", e);
     throw e;
   }
+}
+
+/**
+ * Idempotencia por `reference` (vía parse de referencia Wompi/Landa legacy).
+ */
+async function grantVipAfterApprovedPayment(userId, reference, paymentTransactionId) {
+  const meta = parsePfVipMetaFromReference(reference);
+  if (!meta || meta.userId !== userId) {
+    return { granted: false, vipExpiresAt: null, alreadyRedeemed: false, minutes: 0 };
+  }
+  const minutes = resolveGrantMinutes(meta);
+  return grantVipMinutes(userId, reference, paymentTransactionId, minutes);
 }
 
 async function expireStaleVipSubscriptions() {
@@ -113,6 +138,7 @@ WHERE is_vip = true
 
 module.exports = {
   grantVipAfterApprovedPayment,
+  grantVipMinutes,
   expireStaleVipSubscriptions,
   PLAN_TAG_DAYS,
   resolveGrantMinutes,

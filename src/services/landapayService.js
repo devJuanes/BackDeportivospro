@@ -71,6 +71,10 @@ async function retrievePayment(paymentId) {
   return getClient().payments.retrieve(String(paymentId));
 }
 
+async function retrievePaymentLink(paymentLinkId) {
+  return getClient().paymentLinks.retrieve(String(paymentLinkId));
+}
+
 function constructWebhookEvent(rawBody, signatureHeader) {
   return getClient().webhooks.constructEvent(rawBody, signatureHeader);
 }
@@ -83,6 +87,7 @@ module.exports = {
   landapayConfigured,
   createVipPaymentLink,
   retrievePayment,
+  retrievePaymentLink,
   constructWebhookEvent,
   isLivemode,
   SignatureVerificationError,
